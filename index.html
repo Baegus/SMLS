@@ -92,15 +92,30 @@
 			display: none;
 		}
 
+		#algo-container {
+			display: none
+		}
+
+		label {
+			font-weight: 600
+		}
+
 		.slider-control label {
 			display: block;
-			margin-bottom: 8px;
-			font-weight: 600;
+			margin-bottom: 8px
 		}
 
 		.slider-control input[type="range"] {
 			width: 100%;
-			cursor: pointer;
+			cursor: pointer
+		}
+
+		select {
+			width: 100%;
+			padding: 8px 10px;
+			border-radius: 6px;
+			border: 1px solid #dfe1e6;
+			margin-top: 8px
 		}
 
 		button {
@@ -133,13 +148,27 @@
 			<p>Drag & Drop an image here or click</p>
 			<input type="file" id="image-input" accept="image/*" style="display: none;">
 		</div>
-		<div>
-			<img id="image-to-crop" src="" alt="Source image for cropping">
+
+		<div><img id="image-to-crop" alt="Source image for cropping"></div>
+
+		<div id="algo-container" class="controls">
+			<label for="blend-mode">Blend Algorithm</label>
+			<select id="blend-mode">
+				<option value="linear" selected>Linear (default)</option>
+				<option value="wavy">Wavy gradient</option>
+			</select>
 		</div>
+
 		<div id="blend-slider-container" class="slider-control">
 			<label for="blend-amount">Blend Amount: <span id="blend-value">100</span>%</label>
 			<input type="range" id="blend-amount" min="0" max="100" value="100">
 		</div>
+
+		<div id="waviness-container" class="slider-control">
+			<label for="waviness">Waviness: <span id="waviness-value">35</span>%</label>
+			<input type="range" id="waviness" min="0" max="100" value="35">
+		</div>
+
 		<div class="controls">
 			<button id="download-btn" disabled>Download Tile (PNG)</button>
 		</div>
@@ -161,23 +190,32 @@
 		const imageToCrop = document.getElementById("image-to-crop");
 		const downloadBtn = document.getElementById("download-btn");
 		const previewCanvas = document.getElementById("preview-canvas");
-		const blendSlider = document.getElementById("blend-amount");
-		const blendSliderContainer = document.getElementById("blend-slider-container");
-		const blendValueSpan = document.getElementById("blend-value");
-
-		// State
-		let cropper;
-		let finalTileCanvas;
-		let sourceImage;
 		const previewCtx = previewCanvas.getContext("2d");
+
+		const algoContainer = document.getElementById("algo-container");
+		const blendModeSelect = document.getElementById("blend-mode");
+		const blendSliderContainer = document.getElementById("blend-slider-container");
+		const blendSlider = document.getElementById("blend-amount");
+		const blendValueSpan = document.getElementById("blend-value");
+		const wavinessContainer = document.getElementById("waviness-container");
+		const wavinessSlider = document.getElementById("waviness");
+		const wavinessValueSpan = document.getElementById("waviness-value");
+
+		// ---- State
+		let cropper, finalTileCanvas, sourceImage;
 		let transform = { x: 0, y: 0, zoom: 1 };
 		let isPanning = false;
 		let lastMousePos = { x: 0, y: 0 };
 
 		// --- Event Listeners ---
 		dropZone.addEventListener("click", () => imageInput.click());
-		dropZone.addEventListener("dragover", e => { e.preventDefault(); dropZone.style.borderColor = "#0052cc"; });
-		dropZone.addEventListener("dragleave", () => { dropZone.style.borderColor = "#dfe1e6"; });
+		dropZone.addEventListener("dragover", e => {
+			e.preventDefault();
+			dropZone.style.borderColor = "#0052cc";
+		});
+		dropZone.addEventListener("dragleave", () => {
+			dropZone.style.borderColor = "#dfe1e6";
+		});
 		dropZone.addEventListener("drop", e => {
 			e.preventDefault();
 			dropZone.style.borderColor = "#dfe1e6";
@@ -186,18 +224,58 @@
 		imageInput.addEventListener("change", e => {
 			if (e.target.files.length) handleFile(e.target.files[0]);
 		});
-		downloadBtn.addEventListener("click", downloadTile);
+
 		blendSlider.addEventListener("input", () => {
 			blendValueSpan.textContent = blendSlider.value;
 			generateSeamlessTexture();
 		});
+		blendModeSelect.addEventListener("change", () => {
+			wavinessContainer.style.display = blendModeSelect.value === "wavy" ? "block" : "none";
+			generateSeamlessTexture();
+		});
+		wavinessSlider.addEventListener("input", () => {
+			wavinessValueSpan.textContent = wavinessSlider.value;
+			generateSeamlessTexture();
+		});
 
+		downloadBtn.addEventListener("click", () => {
+			if (!finalTileCanvas) return;
+			const a = document.createElement("a");
+			a.download = "seamless-texture.png";
+			a.href = finalTileCanvas.toDataURL("image/png");
+			a.click();
+		});
+
+		// ---- Preview controls
 		previewCanvas.addEventListener("wheel", handleZoom, { passive: false });
-		previewCanvas.addEventListener("mousedown", startPan);
-		previewCanvas.addEventListener("mousemove", pan);
-		previewCanvas.addEventListener("mouseup", endPan);
-		previewCanvas.addEventListener("mouseleave", endPan);
+		previewCanvas.addEventListener("mousedown", e => {
+			isPanning = true;
+			lastMousePos = { x: e.clientX, y: e.clientY };
+		});
+		previewCanvas.addEventListener("mousemove", e => {
+			if (!isPanning) return;
+			const dx = e.clientX - lastMousePos.x, dy = e.clientY - lastMousePos.y;
+			transform.x += dx;
+			transform.y += dy;
+			lastMousePos = { x: e.clientX, y: e.clientY };
+			drawPreview();
+		});
+		previewCanvas.addEventListener("mouseup", () => isPanning = false);
+		previewCanvas.addEventListener("mouseleave", () => isPanning = false);
 		window.addEventListener("resize", drawPreview);
+
+		function handleZoom(e) {
+			e.preventDefault();
+			const scale = 1.1;
+			const rect = previewCanvas.getBoundingClientRect();
+			const mX = e.clientX - rect.left, mY = e.clientY - rect.top;
+			const oZ = transform.zoom;
+			transform.zoom *= (e.deltaY < 0 ? scale : 1 / scale);
+			transform.zoom = Math.max(0.1, Math.min(10, transform.zoom));
+			transform.x = mX - (mX - transform.x) * (transform.zoom / oZ);
+			transform.y = mY - (mY - transform.y) * (transform.zoom / oZ);
+			drawPreview();
+		}
 
 		function handleFile(file) {
 			imageToCrop.classList.remove("loaded");
@@ -206,17 +284,14 @@
 				sourceImage = new Image();
 				sourceImage.onload = () => {
 					imageToCrop.src = e.target.result;
-
 					dropZone.style.display = "none";
+					algoContainer.style.display = "block";
 					blendSliderContainer.style.display = "block";
+					wavinessContainer.style.display = blendModeSelect.value === "wavy" ? "block" : "none";
 					downloadBtn.disabled = false;
 
 					if (cropper) cropper.destroy();
-
-					cropper = new Cropper(imageToCrop, {
-						viewMode: 1, background: false, autoCropArea: 0.8,
-						crop: generateSeamlessTexture
-					});
+					cropper = new Cropper(imageToCrop, { viewMode: 1, background: false, autoCropArea: 0.8, crop: generateSeamlessTexture });
 					imageToCrop.classList.add("loaded");
 				};
 				sourceImage.src = e.target.result;
@@ -224,6 +299,7 @@
 			reader.readAsDataURL(file);
 		}
 
+		// ---- Tile generation
 		function generateSeamlessTexture() {
 			if (!cropper || !sourceImage) return;
 
@@ -233,16 +309,15 @@
 
 			const sx = (cropData.x - canvasData.left) * scale;
 			const sy = (cropData.y - canvasData.top) * scale;
-			const sWidth = cropData.width * scale;
-			const sHeight = cropData.height * scale;
-
-			if (sWidth <= 0 || sHeight <= 0) return;
+			const sWidth = Math.max(1, Math.round(cropData.width * scale));
+			const sHeight = Math.max(1, Math.round(cropData.height * scale));
 
 			finalTileCanvas = document.createElement("canvas");
 			finalTileCanvas.width = sWidth;
 			finalTileCanvas.height = sHeight;
 			const tileCtx = finalTileCanvas.getContext("2d");
 
+			// Base crop
 			tileCtx.drawImage(sourceImage, sx, sy, sWidth, sHeight, 0, 0, sWidth, sHeight);
 
 			const blendRatio = blendSlider.value / 100;
@@ -257,134 +332,290 @@
 			const topExcess = sy;
 			const bottomExcess = sourceImage.naturalHeight - (sy + sHeight);
 
-			// Decide which side to use for each axis
-			const horizSide = rightExcess >= leftExcess ? "right" : "left";
+			const horizSide = rightExcess >= leftExcess ? "right" : "left";   // which side we borrow from
 			const vertSide = bottomExcess >= topExcess ? "bottom" : "top";
 
-			// replace your helper with a version that builds the gradient in pctx
+			let blendW = 0, blendH = 0, didHoriz = false, didVert = false;
+
+			// helper: edge patch
 			const createAndBlendPatch = (sx_, sy_, w_, h_, dx_, dy_, edge) => {
 				if (w_ <= 0 || h_ <= 0) return;
-
 				const patch = document.createElement("canvas");
-				patch.width = w_; patch.height = h_;
+				patch.width = w_;
+				patch.height = h_;
 				const pctx = patch.getContext("2d");
-
-				// draw the source strip into the patch
 				pctx.drawImage(sourceImage, sx_, sy_, w_, h_, 0, 0, w_, h_);
-
-				// mask in the patch"s own coordinate space
 				pctx.globalCompositeOperation = "destination-in";
-				let g;
-				if (edge === "left" || edge === "right") {
-					g = pctx.createLinearGradient(0, 0, w_, 0);
-					if (edge === "left") {
-						g.addColorStop(0, "rgba(0,0,0,1)");
-						g.addColorStop(1, "rgba(0,0,0,0)");
-					} else {
-						g.addColorStop(0, "rgba(0,0,0,0)");
-						g.addColorStop(1, "rgba(0,0,0,1)");
-					}
+				if (blendModeSelect.value === "wavy") {
+					pctx.drawImage(buildWavyMaskCanvas(w_, h_, edge), 0, 0);
 				} else {
-					g = pctx.createLinearGradient(0, 0, 0, h_);
-					if (edge === "top") {
-						g.addColorStop(0, "rgba(0,0,0,1)");
-						g.addColorStop(1, "rgba(0,0,0,0)");
-					} else { 
-						g.addColorStop(0, "rgba(0,0,0,0)");
-						g.addColorStop(1, "rgba(0,0,0,1)");
-					}
+					drawLinearMask(pctx, w_, h_, edge);
 				}
-				pctx.fillStyle = g;
-				pctx.fillRect(0, 0, w_, h_);
-
-				// composite the masked strip onto the tile
+				pctx.globalCompositeOperation = "source-over";
 				tileCtx.drawImage(patch, dx_, dy_);
 			};
 
-
-			// ---- HORIZONTAL ----
+			// horizontal seam
 			if (horizSide === "right" && rightExcess > 0) {
-				const blendW = Math.floor(Math.min(rightExcess, sWidth / 2) * blendRatio);
-				if (blendW > 0) createAndBlendPatch(sx + sWidth, sy, blendW, sHeight, 0, 0, "left");   // paste on left edge
+				blendW = Math.floor(Math.min(rightExcess, sWidth / 2) * blendRatio);
+				if (blendW > 0) {
+					createAndBlendPatch(sx + sWidth, sy, blendW, sHeight, 0, 0, "left");
+					didHoriz = true;
+				}
 			} else if (horizSide === "left" && leftExcess > 0) {
-				const blendW = Math.floor(Math.min(leftExcess, sWidth / 2) * blendRatio);
-				if (blendW > 0) createAndBlendPatch(sx - blendW, sy, blendW, sHeight, sWidth - blendW, 0, "right"); // paste on right edge
+				blendW = Math.floor(Math.min(leftExcess, sWidth / 2) * blendRatio);
+				if (blendW > 0) {
+					createAndBlendPatch(sx - blendW, sy, blendW, sHeight, sWidth - blendW, 0, "right");
+					didHoriz = true;
+				}
 			}
 
-			// ---- VERTICAL ----
+			// vertical seam
 			if (vertSide === "bottom" && bottomExcess > 0) {
-				const blendH = Math.floor(Math.min(bottomExcess, sHeight / 2) * blendRatio);
-				if (blendH > 0) createAndBlendPatch(sx, sy + sHeight, sWidth, blendH, 0, 0, "top");    // paste on top edge
+				blendH = Math.floor(Math.min(bottomExcess, sHeight / 2) * blendRatio);
+				if (blendH > 0) {
+					createAndBlendPatch(sx, sy + sHeight, sWidth, blendH, 0, 0, "top");
+					didVert = true;
+				}
 			} else if (vertSide === "top" && topExcess > 0) {
-				const blendH = Math.floor(Math.min(topExcess, sHeight / 2) * blendRatio);
-				if (blendH > 0) createAndBlendPatch(sx, sy - blendH, sWidth, blendH, 0, sHeight - blendH, "bottom"); // paste on bottom edge
+				blendH = Math.floor(Math.min(topExcess, sHeight / 2) * blendRatio);
+				if (blendH > 0) {
+					createAndBlendPatch(sx, sy - blendH, sWidth, blendH, 0, sHeight - blendH, "bottom");
+					didVert = true;
+				}
 			}
 
+			if (didHoriz && didVert && blendW > 0 && blendH > 0) {
+				const corner = document.createElement("canvas");
+				corner.width = blendW;
+				corner.height = blendH;
+				const cctx = corner.getContext("2d");
+
+				// choose diagonal source + destination + which corner
+				let srcX, srcY, dstX, dstY, which;
+				if (horizSide === "right" && vertSide === "bottom") { // top-left corner uses BR source
+					srcX = sx + sWidth;
+					srcY = sy + sHeight;
+					dstX = 0;
+					dstY = 0;
+					which = "tl";
+				} else if (horizSide === "right" && vertSide === "top") { // bottom-left corner uses TR source
+					srcX = sx + sWidth;
+					srcY = sy - blendH;
+					dstX = 0;
+					dstY = sHeight - blendH;
+					which = "bl";
+				} else if (horizSide === "left" && vertSide === "bottom") { // top-right corner uses BL source
+					srcX = sx - blendW;
+					srcY = sy + sHeight;
+					dstX = sWidth - blendW;
+					dstY = 0;
+					which = "tr";
+				} else { // left & top -> bottom-right corner uses TL source
+					srcX = sx - blendW;
+					srcY = sy - blendH;
+					dstX = sWidth - blendW;
+					dstY = sHeight - blendH;
+					which = "br";
+				}
+
+				cctx.drawImage(sourceImage, srcX, srcY, blendW, blendH, 0, 0, blendW, blendH);
+				cctx.globalCompositeOperation = "destination-in";
+				if (blendModeSelect.value === "wavy") {
+					cctx.drawImage(buildCornerMaskCanvas(blendW, blendH, which), 0, 0);
+				} else {
+					drawCornerLinearMask(cctx, blendW, blendH, which);
+				}
+				cctx.globalCompositeOperation = "source-over";
+				tileCtx.drawImage(corner, dstX, dstY);
+			}
 
 			drawPreview();
 		}
 
-		// Pan, zoom, draw, and download functions remain the same
-		function drawPreview() {
-			if (!finalTileCanvas) {
-				const rect = previewCanvas.getBoundingClientRect();
-				previewCanvas.width = rect.width;
-				previewCanvas.height = rect.height;
-				previewCtx.clearRect(0, 0, previewCanvas.width, previewCanvas.height);
-				return;
+		// ---- Mask helpers
+		function drawLinearMask(ctx, w, h, edge) {
+			const g = (edge === "left" || edge === "right")
+				? ctx.createLinearGradient(0, 0, w, 0)
+				: ctx.createLinearGradient(0, 0, 0, h);
+
+			if (edge === "left" || edge === "top") {
+				g.addColorStop(0, "rgba(0,0,0,1)");
+				g.addColorStop(1, "rgba(0,0,0,0)");
+			} else { // right or bottom
+				g.addColorStop(0, "rgba(0,0,0,0)");
+				g.addColorStop(1, "rgba(0,0,0,1)");
 			}
+			ctx.fillStyle = g;
+			ctx.fillRect(0, 0, w, h);
+		}
+
+		function drawCornerLinearMask(ctx, w, h, which) {
+			// Create a 2-D alpha mask using black–transparent gradients
+			const gX = ctx.createLinearGradient(0, 0, w, 0);
+			const gY = ctx.createLinearGradient(0, 0, 0, h);
+
+			// Horizontal ramp
+			if (which === "tl" || which === "bl") {
+				gX.addColorStop(0, "rgba(0,0,0,1)");
+				gX.addColorStop(1, "rgba(0,0,0,0)");
+			} else { // right side
+				gX.addColorStop(0, "rgba(0,0,0,0)");
+				gX.addColorStop(1, "rgba(0,0,0,1)");
+			}
+
+			// Vertical ramp
+			if (which === "tl" || which === "tr") {
+				gY.addColorStop(0, "rgba(0,0,0,1)");
+				gY.addColorStop(1, "rgba(0,0,0,0)");
+			} else { // bottom side
+				gY.addColorStop(0, "rgba(0,0,0,0)");
+				gY.addColorStop(1, "rgba(0,0,0,1)");
+			}
+
+			// Multiply the two ramps together using destination-in
+			const temp = document.createElement("canvas");
+			temp.width = w;
+			temp.height = h;
+			const tctx = temp.getContext("2d");
+
+			// First ramp
+			tctx.fillStyle = gX;
+			tctx.fillRect(0, 0, w, h);
+
+			// Multiply with second ramp
+			tctx.globalCompositeOperation = "destination-in";
+			tctx.fillStyle = gY;
+			tctx.fillRect(0, 0, w, h);
+
+			// Draw onto the real mask context
+			ctx.drawImage(temp, 0, 0);
+		}
+
+
+		// Wavy edge mask (periodic & orientation-correct)
+		function buildWavyMaskCanvas(w, h, edge) {
+			const mask = document.createElement("canvas");
+			mask.width = w;
+			mask.height = h;
+			const mctx = mask.getContext("2d");
+			const img = mctx.createImageData(w, h);
+			const data = img.data;
+
+			const isLR = (edge === "left" || edge === "right");
+			const thickness = isLR ? w : h;
+			const orthoLen = isLR ? h : w;
+
+			const wav = parseInt(wavinessSlider.value, 10) || 0;
+			const amp = Math.min(0.45, (wav / 100) * 0.5) * thickness;
+			const wavesBase = Math.max(1, Math.round((wav / 100) * 8)); // integer -> periodic
+			const waves2 = wavesBase * 2;
+			const TWO_PI = Math.PI * 2;
+			let i = 0;
+
+			for (let y = 0; y < h; y++) {
+				for (let x = 0; x < w; x++) {
+					const t = (isLR ? y : x) / Math.max(1, orthoLen - 1);
+					const offs = amp * (0.7 * Math.sin(TWO_PI * wavesBase * t) + 0.3 * Math.sin(TWO_PI * waves2 * t));
+					let pos;
+					if (edge === "left") pos = x - offs;
+					else if (edge === "right") pos = (w - 1 - x) - offs;
+					else if (edge === "top") pos = y - offs;
+					else pos = (h - 1 - y) - offs;
+
+					let a = 1 - (pos / Math.max(1, thickness));
+					a = clamp01(a);
+					a = a * a * (3 - 2 * a);
+					data[i++] = 255;
+					data[i++] = 255;
+					data[i++] = 255;
+					data[i++] = Math.round(a * 255);
+				}
+			}
+			mctx.putImageData(img, 0, 0);
+			return mask;
+		}
+
+		// NEW: 2-D wavy corner mask (product of two oriented wavy ramps)
+		function buildCornerMaskCanvas(w, h, which) {
+			const mask = document.createElement("canvas");
+			mask.width = w;
+			mask.height = h;
+			const ctx = mask.getContext("2d");
+			const img = ctx.createImageData(w, h);
+			const d = img.data;
+
+			const wav = parseInt(wavinessSlider.value, 10) || 0;
+			const ampX = Math.min(0.45, (wav / 100) * 0.5) * w;
+			const ampY = Math.min(0.45, (wav / 100) * 0.5) * h;
+
+			const wavesX = Math.max(1, Math.round((wav / 100) * 8));  // along Y for X-edge waviness
+			const wavesY = Math.max(1, Math.round((wav / 100) * 8));  // along X for Y-edge waviness
+			const TWO_PI = Math.PI * 2;
+			let i = 0;
+
+			for (let y = 0; y < h; y++) {
+				const tY = y / Math.max(1, h - 1);
+				const offX = ampX * (0.7 * Math.sin(TWO_PI * wavesX * tY) + 0.3 * Math.sin(TWO_PI * wavesX * 2 * tY));
+				for (let x = 0; x < w; x++) {
+					const tX = x / Math.max(1, w - 1);
+					const offY = ampY * (0.7 * Math.sin(TWO_PI * wavesY * tX) + 0.3 * Math.sin(TWO_PI * wavesY * 2 * tX));
+
+					// x-ramp orientation
+					let posX;
+					if (which === "tl" || which === "bl") posX = x - offX; // left seam
+					else posX = (w - 1 - x) - offX; // right seam
+
+					// y-ramp orientation
+					let posY;
+					if (which === "tl" || which === "tr") posY = y - offY; // top seam
+					else posY = (h - 1 - y) - offY; // bottom seam
+
+					let ax = 1 - (posX / Math.max(1, w));
+					let ay = 1 - (posY / Math.max(1, h));
+					ax = clamp01(ax);
+					ay = clamp01(ay);
+					// smooth and multiply
+					ax = ax * ax * (3 - 2 * ax);
+					ay = ay * ay * (3 - 2 * ay);
+					const a = clamp01(ax * ay);
+
+					d[i++] = 255;
+					d[i++] = 255;
+					d[i++] = 255;
+					d[i++] = Math.round(a * 255);
+				}
+			}
+			ctx.putImageData(img, 0, 0);
+			return mask;
+		}
+
+		function clamp01(v) {
+			return v < 0 ? 0 : (v > 1 ? 1 : v);
+		}
+
+		// ---- Preview
+		function drawPreview() {
 			const rect = previewCanvas.getBoundingClientRect();
 			if (rect.width === 0 || rect.height === 0) return;
 			previewCanvas.width = rect.width;
 			previewCanvas.height = rect.height;
+
 			previewCtx.clearRect(0, 0, previewCanvas.width, previewCanvas.height);
+			if (!finalTileCanvas) return;
+
 			const pattern = previewCtx.createPattern(finalTileCanvas, "repeat");
-			previewCtx.save(); previewCtx.translate(transform.x, transform.y);
+			previewCtx.save();
+			previewCtx.translate(transform.x, transform.y);
 			previewCtx.scale(transform.zoom, transform.zoom);
 			previewCtx.fillStyle = pattern;
+
 			const fillX = -transform.x / transform.zoom;
 			const fillY = -transform.y / transform.zoom;
-			const fillWidth = previewCanvas.width / transform.zoom;
-			const fillHeight = previewCanvas.height / transform.zoom;
-			previewCtx.fillRect(fillX, fillY, fillWidth, fillHeight);
+			const fillW = previewCanvas.width / transform.zoom;
+			const fillH = previewCanvas.height / transform.zoom;
+			previewCtx.fillRect(fillX, fillY, fillW, fillH);
 			previewCtx.restore();
-		}
-		function handleZoom(e) {
-			e.preventDefault();
-			const scale = 1.1;
-			const rect = previewCanvas.getBoundingClientRect();
-			const mX = e.clientX - rect.left;
-			const mY = e.clientY - rect.top;
-			const oZ = transform.zoom;
-			transform.zoom *= (e.deltaY < 0 ? scale : 1 / scale);
-			transform.zoom = Math.max(0.1, Math.min(10, transform.zoom));
-			transform.x = mX - (mX - transform.x) * (transform.zoom / oZ);
-			transform.y = mY - (mY - transform.y) * (transform.zoom / oZ);
-			drawPreview();
-		}
-		function startPan(e) {
-			isPanning = true;
-			lastMousePos = { x: e.clientX, y: e.clientY };
-		}
-		function pan(e) {
-			if (!isPanning) return;
-			const dx = e.clientX - lastMousePos.x;
-			const dy = e.clientY - lastMousePos.y;
-			transform.x += dx;
-			transform.y += dy;
-			lastMousePos = { x: e.clientX, y: e.clientY };
-			drawPreview();
-		}
-		function endPan() {
-			isPanning = false;
-		}
-		function downloadTile() {
-			if (finalTileCanvas) {
-				const link = document.createElement("a");
-				link.download = "seamless-texture.png";
-				link.href = finalTileCanvas.toDataURL("image/png");
-				link.click();
-			}
 		}
 	</script>
 </body>
