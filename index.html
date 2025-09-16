@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>SMLS - Seamless Tiling Image Editor</title>
+	<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.2/cropper.min.css">
+	<style>
+		body {
+			font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+			display: flex;
+			flex-wrap: wrap;
+			justify-content: center;
+			align-items: flex-start;
+			gap: 30px;
+			padding: 20px;
+			background-color: #f4f5f7;
+			color: #172b4d;
+			line-height: 1.5;
+		}
+
+		.container {
+			background-color: #ffffff;
+			border-radius: 8px;
+			box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+			padding: 20px;
+			width: 100%;
+			max-width: 500px;
+		}
+
+		#preview-container {
+			height: 500px;
+			cursor: grab;
+			overflow: hidden;
+			position: relative;
+			border-radius: 4px;
+			background-color: #dfe1e6;
+		}
+
+		#preview-container:active {
+			cursor: grabbing;
+		}
+
+		#preview-canvas {
+			display: block;
+			width: 100%;
+			height: 100%;
+		}
+
+		#preview-instructions {
+			position: absolute;
+			bottom: 10px;
+			left: 10px;
+			background-color: rgba(0, 0, 0, 0.6);
+			color: white;
+			padding: 5px 10px;
+			border-radius: 4px;
+			font-size: 12px;
+			pointer-events: none;
+		}
+
+		#image-to-crop {
+			max-width: 100%;
+			display: none;
+		}
+		#image-to-crop.loaded {
+			display: block;
+		}
+
+		#drop-zone {
+			border: 2px dashed #dfe1e6;
+			border-radius: 8px;
+			padding: 40px 20px;
+			text-align: center;
+			cursor: pointer;
+			background-color: #fafbfc;
+			transition: background-color 0.2s, border-color 0.2s;
+		}
+
+		#drop-zone:hover {
+			border-color: #0052cc;
+			background-color: #eaf2ff;
+		}
+
+		.controls,
+		.slider-control {
+			margin-top: 20px;
+		}
+
+		.slider-control {
+			display: none;
+		}
+
+		.slider-control label {
+			display: block;
+			margin-bottom: 8px;
+			font-weight: 600;
+		}
+
+		.slider-control input[type="range"] {
+			width: 100%;
+			cursor: pointer;
+		}
+
+		button {
+			font-size: 14px;
+			padding: 10px 16px;
+			border: none;
+			background-color: #0052cc;
+			color: white;
+			cursor: pointer;
+			border-radius: 5px;
+			transition: background-color 0.2s;
+		}
+
+		button:disabled {
+			background-color: #a5adba;
+			cursor: not-allowed;
+		}
+
+		button:hover:not(:disabled) {
+			background-color: #003b95;
+		}
+	</style>
+</head>
+
+<body>
+
+	<div id="editor-container" class="container">
+		<h2>1. Upload & Crop Image</h2>
+		<div id="drop-zone">
+			<p>Drag & Drop an image here or click</p>
+			<input type="file" id="image-input" accept="image/*" style="display: none;">
+		</div>
+		<div>
+			<img id="image-to-crop" src="" alt="Source image for cropping">
+		</div>
+		<div id="blend-slider-container" class="slider-control">
+			<label for="blend-amount">Blend Amount: <span id="blend-value">100</span>%</label>
+			<input type="range" id="blend-amount" min="0" max="100" value="100">
+		</div>
+		<div class="controls">
+			<button id="download-btn" disabled>Download Tile (PNG)</button>
+		</div>
+	</div>
+
+	<div class="container">
+		<h2>2. Preview (Pan & Zoom)</h2>
+		<div id="preview-container">
+			<canvas id="preview-canvas"></canvas>
+			<div id="preview-instructions">Scroll to Zoom, Drag to Pan</div>
+		</div>
+	</div>
+
+	<script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.2/cropper.min.js"></script>
+	<script>
+		// DOM Elements
+		const dropZone = document.getElementById("drop-zone");
+		const imageInput = document.getElementById("image-input");
+		const imageToCrop = document.getElementById("image-to-crop");
+		const downloadBtn = document.getElementById("download-btn");
+		const previewCanvas = document.getElementById("preview-canvas");
+		const blendSlider = document.getElementById("blend-amount");
+		const blendSliderContainer = document.getElementById("blend-slider-container");
+		const blendValueSpan = document.getElementById("blend-value");
+
+		// State
+		let cropper;
+		let finalTileCanvas;
+		let sourceImage;
+		const previewCtx = previewCanvas.getContext("2d");
+		let transform = { x: 0, y: 0, zoom: 1 };
+		let isPanning = false;
+		let lastMousePos = { x: 0, y: 0 };
+
+		// --- Event Listeners ---
+		dropZone.addEventListener("click", () => imageInput.click());
+		dropZone.addEventListener("dragover", e => { e.preventDefault(); dropZone.style.borderColor = "#0052cc"; });
+		dropZone.addEventListener("dragleave", () => { dropZone.style.borderColor = "#dfe1e6"; });
+		dropZone.addEventListener("drop", e => {
+			e.preventDefault();
+			dropZone.style.borderColor = "#dfe1e6";
+			if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+		});
+		imageInput.addEventListener("change", e => {
+			if (e.target.files.length) handleFile(e.target.files[0]);
+		});
+		downloadBtn.addEventListener("click", downloadTile);
+		blendSlider.addEventListener("input", () => {
+			blendValueSpan.textContent = blendSlider.value;
+			generateSeamlessTexture();
+		});
+
+		previewCanvas.addEventListener("wheel", handleZoom, { passive: false });
+		previewCanvas.addEventListener("mousedown", startPan);
+		previewCanvas.addEventListener("mousemove", pan);
+		previewCanvas.addEventListener("mouseup", endPan);
+		previewCanvas.addEventListener("mouseleave", endPan);
+		window.addEventListener("resize", drawPreview);
+
+		function handleFile(file) {
+			imageToCrop.classList.remove("loaded");
+			const reader = new FileReader();
+			reader.onload = e => {
+				sourceImage = new Image();
+				sourceImage.onload = () => {
+					imageToCrop.src = e.target.result;
+
+					dropZone.style.display = "none";
+					blendSliderContainer.style.display = "block";
+					downloadBtn.disabled = false;
+
+					if (cropper) cropper.destroy();
+
+					cropper = new Cropper(imageToCrop, {
+						viewMode: 1, background: false, autoCropArea: 0.8,
+						crop: generateSeamlessTexture
+					});
+					imageToCrop.classList.add("loaded");
+				};
+				sourceImage.src = e.target.result;
+			};
+			reader.readAsDataURL(file);
+		}
+
+		function generateSeamlessTexture() {
+			if (!cropper || !sourceImage) return;
+
+			const cropData = cropper.getData({ rounded: true });
+			const canvasData = cropper.getCanvasData();
+			const scale = sourceImage.naturalWidth / canvasData.naturalWidth;
+
+			const sx = (cropData.x - canvasData.left) * scale;
+			const sy = (cropData.y - canvasData.top) * scale;
+			const sWidth = cropData.width * scale;
+			const sHeight = cropData.height * scale;
+
+			if (sWidth <= 0 || sHeight <= 0) return;
+
+			finalTileCanvas = document.createElement("canvas");
+			finalTileCanvas.width = sWidth;
+			finalTileCanvas.height = sHeight;
+			const tileCtx = finalTileCanvas.getContext("2d");
+
+			tileCtx.drawImage(sourceImage, sx, sy, sWidth, sHeight, 0, 0, sWidth, sHeight);
+
+			const blendRatio = blendSlider.value / 100;
+			if (blendRatio === 0) {
+				drawPreview();
+				return;
+			}
+
+			// Calculate available "excess" pixels on all sides
+			const leftExcess = sx;
+			const rightExcess = sourceImage.naturalWidth - (sx + sWidth);
+			const topExcess = sy;
+			const bottomExcess = sourceImage.naturalHeight - (sy + sHeight);
+
+			// Decide which side to use for each axis
+			const horizSide = rightExcess >= leftExcess ? "right" : "left";
+			const vertSide = bottomExcess >= topExcess ? "bottom" : "top";
+
+			// replace your helper with a version that builds the gradient in pctx
+			const createAndBlendPatch = (sx_, sy_, w_, h_, dx_, dy_, edge) => {
+				if (w_ <= 0 || h_ <= 0) return;
+
+				const patch = document.createElement("canvas");
+				patch.width = w_; patch.height = h_;
+				const pctx = patch.getContext("2d");
+
+				// draw the source strip into the patch
+				pctx.drawImage(sourceImage, sx_, sy_, w_, h_, 0, 0, w_, h_);
+
+				// mask in the patch"s own coordinate space
+				pctx.globalCompositeOperation = "destination-in";
+				let g;
+				if (edge === "left" || edge === "right") {
+					g = pctx.createLinearGradient(0, 0, w_, 0);
+					if (edge === "left") {
+						g.addColorStop(0, "rgba(0,0,0,1)");
+						g.addColorStop(1, "rgba(0,0,0,0)");
+					} else {
+						g.addColorStop(0, "rgba(0,0,0,0)");
+						g.addColorStop(1, "rgba(0,0,0,1)");
+					}
+				} else {
+					g = pctx.createLinearGradient(0, 0, 0, h_);
+					if (edge === "top") {
+						g.addColorStop(0, "rgba(0,0,0,1)");
+						g.addColorStop(1, "rgba(0,0,0,0)");
+					} else { 
+						g.addColorStop(0, "rgba(0,0,0,0)");
+						g.addColorStop(1, "rgba(0,0,0,1)");
+					}
+				}
+				pctx.fillStyle = g;
+				pctx.fillRect(0, 0, w_, h_);
+
+				// composite the masked strip onto the tile
+				tileCtx.drawImage(patch, dx_, dy_);
+			};
+
+
+			// ---- HORIZONTAL ----
+			if (horizSide === "right" && rightExcess > 0) {
+				const blendW = Math.floor(Math.min(rightExcess, sWidth / 2) * blendRatio);
+				if (blendW > 0) createAndBlendPatch(sx + sWidth, sy, blendW, sHeight, 0, 0, "left");   // paste on left edge
+			} else if (horizSide === "left" && leftExcess > 0) {
+				const blendW = Math.floor(Math.min(leftExcess, sWidth / 2) * blendRatio);
+				if (blendW > 0) createAndBlendPatch(sx - blendW, sy, blendW, sHeight, sWidth - blendW, 0, "right"); // paste on right edge
+			}
+
+			// ---- VERTICAL ----
+			if (vertSide === "bottom" && bottomExcess > 0) {
+				const blendH = Math.floor(Math.min(bottomExcess, sHeight / 2) * blendRatio);
+				if (blendH > 0) createAndBlendPatch(sx, sy + sHeight, sWidth, blendH, 0, 0, "top");    // paste on top edge
+			} else if (vertSide === "top" && topExcess > 0) {
+				const blendH = Math.floor(Math.min(topExcess, sHeight / 2) * blendRatio);
+				if (blendH > 0) createAndBlendPatch(sx, sy - blendH, sWidth, blendH, 0, sHeight - blendH, "bottom"); // paste on bottom edge
+			}
+
+
+			drawPreview();
+		}
+
+		// Pan, zoom, draw, and download functions remain the same
+		function drawPreview() {
+			if (!finalTileCanvas) {
+				const rect = previewCanvas.getBoundingClientRect();
+				previewCanvas.width = rect.width;
+				previewCanvas.height = rect.height;
+				previewCtx.clearRect(0, 0, previewCanvas.width, previewCanvas.height);
+				return;
+			}
+			const rect = previewCanvas.getBoundingClientRect();
+			if (rect.width === 0 || rect.height === 0) return;
+			previewCanvas.width = rect.width;
+			previewCanvas.height = rect.height;
+			previewCtx.clearRect(0, 0, previewCanvas.width, previewCanvas.height);
+			const pattern = previewCtx.createPattern(finalTileCanvas, "repeat");
+			previewCtx.save(); previewCtx.translate(transform.x, transform.y);
+			previewCtx.scale(transform.zoom, transform.zoom);
+			previewCtx.fillStyle = pattern;
+			const fillX = -transform.x / transform.zoom;
+			const fillY = -transform.y / transform.zoom;
+			const fillWidth = previewCanvas.width / transform.zoom;
+			const fillHeight = previewCanvas.height / transform.zoom;
+			previewCtx.fillRect(fillX, fillY, fillWidth, fillHeight);
+			previewCtx.restore();
+		}
+		function handleZoom(e) {
+			e.preventDefault();
+			const scale = 1.1;
+			const rect = previewCanvas.getBoundingClientRect();
+			const mX = e.clientX - rect.left;
+			const mY = e.clientY - rect.top;
+			const oZ = transform.zoom;
+			transform.zoom *= (e.deltaY < 0 ? scale : 1 / scale);
+			transform.zoom = Math.max(0.1, Math.min(10, transform.zoom));
+			transform.x = mX - (mX - transform.x) * (transform.zoom / oZ);
+			transform.y = mY - (mY - transform.y) * (transform.zoom / oZ);
+			drawPreview();
+		}
+		function startPan(e) {
+			isPanning = true;
+			lastMousePos = { x: e.clientX, y: e.clientY };
+		}
+		function pan(e) {
+			if (!isPanning) return;
+			const dx = e.clientX - lastMousePos.x;
+			const dy = e.clientY - lastMousePos.y;
+			transform.x += dx;
+			transform.y += dy;
+			lastMousePos = { x: e.clientX, y: e.clientY };
+			drawPreview();
+		}
+		function endPan() {
+			isPanning = false;
+		}
+		function downloadTile() {
+			if (finalTileCanvas) {
+				const link = document.createElement("a");
+				link.download = "seamless-texture.png";
+				link.href = finalTileCanvas.toDataURL("image/png");
+				link.click();
+			}
+		}
+	</script>
+</body>
+
+</html>
