@@ -156,6 +156,7 @@
 			<select id="blend-mode">
 				<option value="linear" selected>Linear (default)</option>
 				<option value="wavy">Wavy gradient</option>
+				<option value="perlin">Perlin Noise</option>
 			</select>
 		</div>
 
@@ -168,6 +169,17 @@
 			<label for="waviness">Waviness: <span id="waviness-value">35</span>%</label>
 			<input type="range" id="waviness" min="0" max="100" value="35">
 		</div>
+
+		<div id="perlin-scale-container" class="slider-control">
+			<label for="perlin-scale">Noise Scale: <span id="perlin-scale-value">50</span>%</label>
+			<input type="range" id="perlin-scale" min="1" max="100" value="50">
+		</div>
+
+		<div id="perlin-octaves-container" class="slider-control">
+			<label for="perlin-octaves">Noise Detail (Octaves): <span id="perlin-octaves-value">3</span></label>
+			<input type="range" id="perlin-octaves" min="1" max="8" value="3">
+		</div>
+
 
 		<div class="controls">
 			<button id="download-btn" disabled>Download Tile (PNG)</button>
@@ -190,6 +202,43 @@
 
 	<script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.2/cropper.min.js"></script>
 	<script>
+		// --- PERLIN NOISE GENERATOR ---
+		// Based on implementation by Ken Perlin
+		class PerlinNoise {
+			constructor() {
+				this.p = new Uint8Array(512);
+				const permutation = [151, 160, 137, 91, 90, 15, 131, 13, 201, 95, 96, 53, 194, 233, 7, 225, 140, 36, 103, 30, 69, 142, 8, 99, 37, 240, 21, 10, 23, 190, 6, 148, 247, 120, 234, 75, 0, 26, 197, 62, 94, 252, 219, 203, 117, 35, 11, 32, 57, 177, 33, 88, 237, 149, 56, 87, 174, 20, 125, 136, 171, 168, 68, 175, 74, 165, 71, 134, 139, 48, 27, 166, 77, 146, 158, 231, 83, 111, 229, 122, 60, 211, 133, 230, 220, 105, 92, 41, 55, 46, 245, 40, 244, 102, 143, 54, 65, 25, 63, 161, 1, 216, 80, 73, 209, 76, 132, 187, 208, 89, 18, 169, 200, 196, 135, 130, 116, 188, 159, 86, 164, 100, 109, 198, 173, 186, 3, 64, 52, 217, 226, 250, 124, 123, 5, 202, 38, 147, 118, 126, 255, 82, 85, 212, 207, 206, 59, 227, 47, 16, 58, 17, 182, 189, 28, 42, 223, 183, 170, 213, 119, 248, 152, 2, 44, 154, 163, 70, 221, 153, 101, 155, 167, 43, 172, 9, 129, 22, 39, 253, 19, 98, 108, 110, 79, 113, 224, 232, 178, 185, 112, 104, 218, 246, 97, 228, 254, 138, 1, 107, 205, 4, 195, 121, 115, 210, 51, 14, 162, 34, 215, 150, 156, 128, 141, 180, 181, 114, 193, 214, 199, 192, 106, 72, 127, 176, 238, 239, 184, 249, 67, 12, 145, 24, 236, 222, 191, 144, 157, 66, 235, 49, 61, 179, 81, 93, 243, 204, 241, 78, 242, 12, 31, 50];
+				for (let i = 0; i < 256; i++) this.p[i] = this.p[i + 256] = permutation[i];
+			}
+			noise(x, y, z = 0) {
+				let X = Math.floor(x) & 255,
+					Y = Math.floor(y) & 255,
+					Z = Math.floor(z) & 255;
+				x -= Math.floor(x); y -= Math.floor(y); z -= Math.floor(z);
+				let u = this.fade(x), v = this.fade(y), w = this.fade(z);
+				let A = this.p[X] + Y,
+					AA = this.p[A] + Z,
+					AB = this.p[A + 1] + Z,
+					B = this.p[X + 1] + Y,
+					BA = this.p[B] + Z,
+					BB = this.p[B + 1] + Z;
+				return this.lerp(w, this.lerp(v, this.lerp(u, this.grad(this.p[AA], x, y, z), this.grad(this.p[BA], x - 1, y, z)),
+					this.lerp(u, this.grad(this.p[AB], x, y - 1, z), this.grad(this.p[BB], x - 1, y - 1, z))),
+					this.lerp(v, this.lerp(u, this.grad(this.p[AA + 1], x, y, z - 1),
+					this.grad(this.p[BA + 1], x - 1, y, z - 1)),
+					this.lerp(u, this.grad(this.p[AB + 1], x, y - 1, z - 1), this.grad(this.p[BB + 1], x - 1, y - 1, z - 1))));
+			}
+			fade(t) { return t * t * t * (t * (t * 6 - 15) + 10); }
+			lerp(t, a, b) { return a + t * (b - a); }
+			grad(hash, x, y, z) {
+				let h = hash & 15;
+				let u = h < 8 ? x : y, v = h < 4 ? y : h === 12 || h === 14 ? x : z;
+				return ((h & 1) === 0 ? u : -u) + ((h & 2) === 0 ? v : -v);
+			}
+		}
+		const perlin = new PerlinNoise();
+
+
 		// DOM Elements
 		const dropZone = document.getElementById("drop-zone");
 		const imageInput = document.getElementById("image-input");
@@ -207,6 +256,13 @@
 		const wavinessContainer = document.getElementById("waviness-container");
 		const wavinessSlider = document.getElementById("waviness");
 		const wavinessValueSpan = document.getElementById("waviness-value");
+		const perlinScaleContainer = document.getElementById("perlin-scale-container");
+		const perlinScaleSlider = document.getElementById("perlin-scale");
+		const perlinScaleValueSpan = document.getElementById("perlin-scale-value");
+		const perlinOctavesContainer = document.getElementById("perlin-octaves-container");
+		const perlinOctavesSlider = document.getElementById("perlin-octaves");
+		const perlinOctavesValueSpan = document.getElementById("perlin-octaves-value");
+
 
 		// ---- State
 		let cropper, finalTileCanvas, transitionOnlyCanvas, sourceImage;
@@ -232,16 +288,30 @@
 			if (e.target.files.length) handleFile(e.target.files[0]);
 		});
 
+		const handleParamChange = () => generateSeamlessTexture();
 		blendSlider.addEventListener("input", () => {
 			blendValueSpan.textContent = blendSlider.value;
-			generateSeamlessTexture();
-		});
-		blendModeSelect.addEventListener("change", () => {
-			wavinessContainer.style.display = blendModeSelect.value === "wavy" ? "block" : "none";
-			generateSeamlessTexture();
+			handleParamChange();
 		});
 		wavinessSlider.addEventListener("input", () => {
 			wavinessValueSpan.textContent = wavinessSlider.value;
+			handleParamChange();
+		});
+		perlinScaleSlider.addEventListener("input", () => {
+			perlinScaleValueSpan.textContent = perlinScaleSlider.value;
+			handleParamChange();
+		});
+		perlinOctavesSlider.addEventListener("input", () => {
+			perlinOctavesValueSpan.textContent = perlinOctavesSlider.value;
+			handleParamChange();
+		});
+
+
+		blendModeSelect.addEventListener("change", () => {
+			const mode = blendModeSelect.value;
+			wavinessContainer.style.display = mode === "wavy" ? "block" : "none";
+			perlinScaleContainer.style.display = mode === "perlin" ? "block" : "none";
+			perlinOctavesContainer.style.display = mode === "perlin" ? "block" : "none";
 			generateSeamlessTexture();
 		});
 
@@ -296,7 +366,11 @@
 					dropZone.style.display = "none";
 					algoContainer.style.display = "block";
 					blendSliderContainer.style.display = "block";
-					wavinessContainer.style.display = blendModeSelect.value === "wavy" ? "block" : "none";
+					// Show correct sliders for default mode
+					const mode = blendModeSelect.value;
+					wavinessContainer.style.display = mode === "wavy" ? "block" : "none";
+					perlinScaleContainer.style.display = mode === "perlin" ? "block" : "none";
+					perlinOctavesContainer.style.display = mode === "perlin" ? "block" : "none";
 					downloadBtn.disabled = false;
 
 					if (cropper) cropper.destroy();
@@ -360,8 +434,12 @@
 				const pctx = patch.getContext("2d");
 				pctx.drawImage(sourceImage, sx_, sy_, w_, h_, 0, 0, w_, h_);
 				pctx.globalCompositeOperation = "destination-in";
-				if (blendModeSelect.value === "wavy") {
+
+				const mode = blendModeSelect.value;
+				if (mode === "wavy") {
 					pctx.drawImage(buildWavyMaskCanvas(w_, h_, edge), 0, 0);
+				} else if (mode === "perlin") {
+					pctx.drawImage(buildPerlinMaskCanvas(w_, h_, edge), 0, 0);
 				} else {
 					drawLinearMask(pctx, w_, h_, edge);
 				}
@@ -436,9 +514,13 @@
 
 				cctx.drawImage(sourceImage, srcX, srcY, blendW, blendH, 0, 0, blendW, blendH);
 				cctx.globalCompositeOperation = "destination-in";
-				if (blendModeSelect.value === "wavy") {
-					cctx.drawImage(buildCornerMaskCanvas(blendW, blendH, which, sWidth, sHeight, dstX, dstY), 0, 0);
-				} else {
+				const mode = blendModeSelect.value;
+				if (mode === "wavy") {
+					cctx.drawImage(buildWavyCornerMaskCanvas(blendW, blendH, which, sWidth, sHeight, dstX, dstY), 0, 0);
+				} else if (mode === "perlin") {
+					cctx.drawImage(buildPerlinCornerMaskCanvas(blendW, blendH, which, sWidth, sHeight, dstX, dstY), 0, 0);
+				}
+				else {
 					drawCornerLinearMask(cctx, blendW, blendH, which);
 				}
 				cctx.globalCompositeOperation = "source-over";
@@ -553,7 +635,7 @@
 		}
 
 		// 2-D wavy corner mask using global coordinates for continuous waves
-		function buildCornerMaskCanvas(w, h, which, tileW, tileH, offsetX, offsetY) {
+		function buildWavyCornerMaskCanvas(w, h, which, tileW, tileH, offsetX, offsetY) {
 			const mask = document.createElement("canvas");
 			mask.width = w;
 			mask.height = h;
@@ -606,6 +688,117 @@
 			ctx.putImageData(img, 0, 0);
 			return mask;
 		}
+
+		// ---- Perlin Noise Mask Functions ----
+		function buildPerlinMaskCanvas(w, h, edge) {
+			const mask = document.createElement("canvas");
+			mask.width = w;
+			mask.height = h;
+			const mctx = mask.getContext("2d");
+			const img = mctx.createImageData(w, h);
+			const data = img.data;
+
+			const isLR = (edge === "left" || edge === "right");
+			const thickness = isLR ? w : h;
+			const scale = (parseInt(perlinScaleSlider.value, 10) || 50) / 1000;
+			const octaves = parseInt(perlinOctavesSlider.value, 10) || 3;
+			const amp = 0.45 * thickness; // Amplitude of the noise effect
+			let i = 0;
+
+			for (let y = 0; y < h; y++) {
+				for (let x = 0; x < w; x++) {
+					let noiseVal = 0;
+					let frequency = scale;
+					let amplitude = 1;
+					let maxAmplitude = 0;
+					for (let o = 0; o < octaves; o++) {
+						noiseVal += perlin.noise(x * frequency, y * frequency) * amplitude;
+						maxAmplitude += amplitude;
+						amplitude *= 0.5; // persistence
+						frequency *= 2; // lacunarity
+					}
+					noiseVal /= maxAmplitude; // normalize
+
+					const offs = amp * noiseVal;
+					let pos;
+					if (edge === "left") pos = x - offs;
+					else if (edge === "right") pos = (w - 1 - x) - offs;
+					else if (edge === "top") pos = y - offs;
+					else pos = (h - 1 - y) - offs;
+
+					let a = 1 - (pos / Math.max(1, thickness));
+					a = clamp01(a);
+					a = a * a * (3 - 2 * a); // smoothstep
+					data[i++] = 255;
+					data[i++] = 255;
+					data[i++] = 255;
+					data[i++] = Math.round(a * 255);
+				}
+			}
+			mctx.putImageData(img, 0, 0);
+			return mask;
+		}
+
+		function buildPerlinCornerMaskCanvas(w, h, which, tileW, tileH, offsetX, offsetY) {
+			const mask = document.createElement("canvas");
+			mask.width = w;
+			mask.height = h;
+			const ctx = mask.getContext("2d");
+			const img = ctx.createImageData(w, h);
+			const d = img.data;
+
+			const scale = (parseInt(perlinScaleSlider.value, 10) || 50) / 1000;
+			const octaves = parseInt(perlinOctavesSlider.value, 10) || 3;
+			const ampX = 0.45 * w;
+			const ampY = 0.45 * h;
+			let i = 0;
+
+			const getNoise = (x, y) => {
+				let noiseVal = 0, freq = scale, ampl = 1, maxAmpl = 0;
+				for (let o = 0; o < octaves; o++) {
+					noiseVal += perlin.noise(x * freq, y * freq, o * 10.3) * ampl;
+					maxAmpl += ampl;
+					ampl *= 0.5;
+					freq *= 2;
+				}
+				return noiseVal / maxAmpl;
+			};
+
+			for (let y = 0; y < h; y++) {
+				for (let x = 0; x < w; x++) {
+					const globalX = x + offsetX;
+					const globalY = y + offsetY;
+
+					const noiseVal = getNoise(globalX, globalY);
+					const offX = ampX * noiseVal;
+					const offY = ampY * noiseVal;
+
+					let posX; // x-ramp orientation
+					if (which === "tl" || which === "bl") posX = x - offX;
+					else posX = (w - 1 - x) - offX;
+
+					let posY; // y-ramp orientation
+					if (which === "tl" || which === "tr") posY = y - offY;
+					else posY = (h - 1 - y) - offY;
+
+					let ax = 1 - (posX / Math.max(1, w));
+					let ay = 1 - (posY / Math.max(1, h));
+					ax = clamp01(ax);
+					ay = clamp01(ay);
+					ax = ax * ax * (3 - 2 * ax); // smoothstep
+					ay = ay * ay * (3 - 2 * ay);
+					const a = clamp01(ax * ay);
+
+					d[i++] = 255;
+					d[i++] = 255;
+					d[i++] = 255;
+					d[i++] = Math.round(a * 255);
+				}
+			}
+			ctx.putImageData(img, 0, 0);
+			return mask;
+		}
+
 
 		function clamp01(v) {
 			return v < 0 ? 0 : (v > 1 ? 1 : v);
