@@ -437,7 +437,7 @@
 				cctx.drawImage(sourceImage, srcX, srcY, blendW, blendH, 0, 0, blendW, blendH);
 				cctx.globalCompositeOperation = "destination-in";
 				if (blendModeSelect.value === "wavy") {
-					cctx.drawImage(buildCornerMaskCanvas(blendW, blendH, which), 0, 0);
+					cctx.drawImage(buildCornerMaskCanvas(blendW, blendH, which, sWidth, sHeight, dstX, dstY), 0, 0);
 				} else {
 					drawCornerLinearMask(cctx, blendW, blendH, which);
 				}
@@ -552,8 +552,8 @@
 			return mask;
 		}
 
-		// NEW: 2-D wavy corner mask (product of two oriented wavy ramps)
-		function buildCornerMaskCanvas(w, h, which) {
+		// 2-D wavy corner mask using global coordinates for continuous waves
+		function buildCornerMaskCanvas(w, h, which, tileW, tileH, offsetX, offsetY) {
 			const mask = document.createElement("canvas");
 			mask.width = w;
 			mask.height = h;
@@ -564,18 +564,19 @@
 			const wav = parseInt(wavinessSlider.value, 10) || 0;
 			const ampX = Math.min(0.45, (wav / 100) * 0.5) * w;
 			const ampY = Math.min(0.45, (wav / 100) * 0.5) * h;
-
-			const wavesX = Math.max(1, Math.round((wav / 100) * 8));  // along Y for X-edge waviness
-			const wavesY = Math.max(1, Math.round((wav / 100) * 8));  // along X for Y-edge waviness
+			const waves = Math.max(1, Math.round((wav / 100) * 8));
 			const TWO_PI = Math.PI * 2;
 			let i = 0;
 
 			for (let y = 0; y < h; y++) {
-				const tY = y / Math.max(1, h - 1);
-				const offX = ampX * (0.7 * Math.sin(TWO_PI * wavesX * tY) + 0.3 * Math.sin(TWO_PI * wavesX * 2 * tY));
+				const globalY = y + offsetY;
+				const tY = globalY / Math.max(1, tileH - 1);
+				const offX = ampX * (0.7 * Math.sin(TWO_PI * waves * tY) + 0.3 * Math.sin(TWO_PI * waves * 2 * tY));
+
 				for (let x = 0; x < w; x++) {
-					const tX = x / Math.max(1, w - 1);
-					const offY = ampY * (0.7 * Math.sin(TWO_PI * wavesY * tX) + 0.3 * Math.sin(TWO_PI * wavesY * 2 * tX));
+					const globalX = x + offsetX;
+					const tX = globalX / Math.max(1, tileW - 1);
+					const offY = ampY * (0.7 * Math.sin(TWO_PI * waves * tX) + 0.3 * Math.sin(TWO_PI * waves * 2 * tX));
 
 					// x-ramp orientation
 					let posX;
