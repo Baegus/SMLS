@@ -180,6 +180,12 @@
 			<canvas id="preview-canvas"></canvas>
 			<div id="preview-instructions">Scroll to Zoom, Drag to Pan</div>
 		</div>
+		<div class="controls">
+			<label>
+				<input type="checkbox" id="show-transitions">
+				Show transitions
+			</label>
+		</div>
 	</div>
 
 	<script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.2/cropper.min.js"></script>
@@ -191,6 +197,7 @@
 		const downloadBtn = document.getElementById("download-btn");
 		const previewCanvas = document.getElementById("preview-canvas");
 		const previewCtx = previewCanvas.getContext("2d");
+		const showTransitionsCheckbox = document.getElementById("show-transitions");
 
 		const algoContainer = document.getElementById("algo-container");
 		const blendModeSelect = document.getElementById("blend-mode");
@@ -202,7 +209,7 @@
 		const wavinessValueSpan = document.getElementById("waviness-value");
 
 		// ---- State
-		let cropper, finalTileCanvas, sourceImage;
+		let cropper, finalTileCanvas, transitionOnlyCanvas, sourceImage;
 		let transform = { x: 0, y: 0, zoom: 1 };
 		let isPanning = false;
 		let lastMousePos = { x: 0, y: 0 };
@@ -263,6 +270,8 @@
 		previewCanvas.addEventListener("mouseup", () => isPanning = false);
 		previewCanvas.addEventListener("mouseleave", () => isPanning = false);
 		window.addEventListener("resize", drawPreview);
+		showTransitionsCheckbox.addEventListener("change", drawPreview);
+
 
 		function handleZoom(e) {
 			e.preventDefault();
@@ -317,6 +326,11 @@
 			finalTileCanvas.height = sHeight;
 			const tileCtx = finalTileCanvas.getContext("2d");
 
+			transitionOnlyCanvas = document.createElement("canvas");
+			transitionOnlyCanvas.width = sWidth;
+			transitionOnlyCanvas.height = sHeight;
+			const transCtx = transitionOnlyCanvas.getContext("2d");
+
 			// Base crop
 			tileCtx.drawImage(sourceImage, sx, sy, sWidth, sHeight, 0, 0, sWidth, sHeight);
 
@@ -353,6 +367,7 @@
 				}
 				pctx.globalCompositeOperation = "source-over";
 				tileCtx.drawImage(patch, dx_, dy_);
+				transCtx.drawImage(patch, dx_, dy_);
 			};
 
 			// horizontal seam
@@ -428,6 +443,7 @@
 				}
 				cctx.globalCompositeOperation = "source-over";
 				tileCtx.drawImage(corner, dstX, dstY);
+				transCtx.drawImage(corner, dstX, dstY);
 			}
 
 			drawPreview();
@@ -602,9 +618,11 @@
 			previewCanvas.height = rect.height;
 
 			previewCtx.clearRect(0, 0, previewCanvas.width, previewCanvas.height);
-			if (!finalTileCanvas) return;
 
-			const pattern = previewCtx.createPattern(finalTileCanvas, "repeat");
+			const sourceCanvas = showTransitionsCheckbox.checked ? transitionOnlyCanvas : finalTileCanvas;
+			if (!sourceCanvas) return;
+
+			const pattern = previewCtx.createPattern(sourceCanvas, "repeat");
 			previewCtx.save();
 			previewCtx.translate(transform.x, transform.y);
 			previewCtx.scale(transform.zoom, transform.zoom);
