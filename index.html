@@ -20,6 +20,10 @@
 			line-height: 1.5;
 		}
 
+		body * {
+			user-select: none;
+		}
+
 		.container {
 			background-color: #ffffff;
 			border-radius: 8px;
@@ -36,6 +40,8 @@
 			position: relative;
 			border-radius: 4px;
 			background-color: #dfe1e6;
+			touch-action: none;
+			/* Prevents default browser actions like scroll/zoom on touch */
 		}
 
 		#preview-container:active {
@@ -48,22 +54,11 @@
 			height: 100%;
 		}
 
-		#preview-instructions {
-			position: absolute;
-			bottom: 10px;
-			left: 10px;
-			background-color: rgba(0, 0, 0, 0.6);
-			color: white;
-			padding: 5px 10px;
-			border-radius: 4px;
-			font-size: 12px;
-			pointer-events: none;
-		}
-
 		#image-to-crop {
 			max-width: 100%;
 			display: none;
 		}
+
 		#image-to-crop.loaded {
 			display: block;
 		}
@@ -154,15 +149,15 @@
 		<div id="algo-container" class="controls">
 			<label for="blend-mode">Blend Algorithm</label>
 			<select id="blend-mode">
-				<option value="linear" selected>Linear (default)</option>
+				<option value="perlin" selected>Perlin Noise</option>
 				<option value="wavy">Wavy gradient</option>
-				<option value="perlin">Perlin Noise</option>
+				<option value="linear">Linear gradient</option>
 			</select>
 		</div>
 
 		<div id="blend-slider-container" class="slider-control">
-			<label for="blend-amount">Blend Amount: <span id="blend-value">100</span>%</label>
-			<input type="range" id="blend-amount" min="0" max="100" value="100">
+			<label for="blend-amount">Blend Amount: <span id="blend-value">16</span>%</label>
+			<input type="range" id="blend-amount" min="0" max="100" value="16">
 		</div>
 
 		<div id="waviness-container" class="slider-control">
@@ -171,8 +166,8 @@
 		</div>
 
 		<div id="perlin-scale-container" class="slider-control">
-			<label for="perlin-scale">Noise Scale: <span id="perlin-scale-value">50</span>%</label>
-			<input type="range" id="perlin-scale" min="1" max="100" value="50">
+			<label for="perlin-scale">Noise Scale: <span id="perlin-scale-value">20</span>%</label>
+			<input type="range" id="perlin-scale" min="1" max="100" value="20">
 		</div>
 
 		<div id="perlin-octaves-container" class="slider-control">
@@ -190,12 +185,11 @@
 		<h2>2. Preview (Pan & Zoom)</h2>
 		<div id="preview-container">
 			<canvas id="preview-canvas"></canvas>
-			<div id="preview-instructions">Scroll to Zoom, Drag to Pan</div>
 		</div>
 		<div class="controls">
 			<label>
 				<input type="checkbox" id="show-transitions">
-				Show transitions
+				Show transitions only
 			</label>
 		</div>
 	</div>
@@ -225,8 +219,8 @@
 				return this.lerp(w, this.lerp(v, this.lerp(u, this.grad(this.p[AA], x, y, z), this.grad(this.p[BA], x - 1, y, z)),
 					this.lerp(u, this.grad(this.p[AB], x, y - 1, z), this.grad(this.p[BB], x - 1, y - 1, z))),
 					this.lerp(v, this.lerp(u, this.grad(this.p[AA + 1], x, y, z - 1),
-					this.grad(this.p[BA + 1], x - 1, y, z - 1)),
-					this.lerp(u, this.grad(this.p[AB + 1], x, y - 1, z - 1), this.grad(this.p[BB + 1], x - 1, y - 1, z - 1))));
+						this.grad(this.p[BA + 1], x - 1, y, z - 1)),
+						this.lerp(u, this.grad(this.p[AB + 1], x, y - 1, z - 1), this.grad(this.p[BB + 1], x - 1, y - 1, z - 1))));
 			}
 			fade(t) { return t * t * t * (t * (t * 6 - 15) + 10); }
 			lerp(t, a, b) { return a + t * (b - a); }
@@ -269,6 +263,7 @@
 		let transform = { x: 0, y: 0, zoom: 1 };
 		let isPanning = false;
 		let lastMousePos = { x: 0, y: 0 };
+		let initialPinchDistance = null;
 
 		// --- Event Listeners ---
 		dropZone.addEventListener("click", () => imageInput.click());
@@ -323,7 +318,7 @@
 			a.click();
 		});
 
-		// ---- Preview controls
+		// ---- Preview controls (Mouse)
 		previewCanvas.addEventListener("wheel", handleZoom, { passive: false });
 		previewCanvas.addEventListener("mousedown", e => {
 			isPanning = true;
@@ -339,6 +334,72 @@
 		});
 		previewCanvas.addEventListener("mouseup", () => isPanning = false);
 		previewCanvas.addEventListener("mouseleave", () => isPanning = false);
+
+		// ---- Preview controls (Touch)
+		previewCanvas.addEventListener("touchstart", e => {
+			e.preventDefault();
+			if (e.touches.length === 1) {
+				isPanning = true;
+				lastMousePos = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+			} else if (e.touches.length === 2) {
+				isPanning = false; // Stop panning for pinch
+				const dx = e.touches[0].clientX - e.touches[1].clientX;
+				const dy = e.touches[0].clientY - e.touches[1].clientY;
+				initialPinchDistance = Math.sqrt(dx * dx + dy * dy);
+			}
+		}, { passive: false });
+
+		previewCanvas.addEventListener("touchmove", e => {
+			e.preventDefault();
+			if (e.touches.length === 1 && isPanning) {
+				// Pan (1 finger)
+				const touch = e.touches[0];
+				const dx = touch.clientX - lastMousePos.x;
+				const dy = touch.clientY - lastMousePos.y;
+				transform.x += dx;
+				transform.y += dy;
+				lastMousePos = { x: touch.clientX, y: touch.clientY };
+				drawPreview();
+			} else if (e.touches.length === 2 && initialPinchDistance) {
+				// Pinch to Zoom (2 fingers)
+				const dx = e.touches[0].clientX - e.touches[1].clientX;
+				const dy = e.touches[0].clientY - e.touches[1].clientY;
+				const currentDistance = Math.sqrt(dx * dx + dy * dy);
+				const scale = currentDistance / initialPinchDistance;
+
+				const rect = previewCanvas.getBoundingClientRect();
+				const midX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+				const midY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+				const mX = midX - rect.left;
+				const mY = midY - rect.top;
+
+				const oZ = transform.zoom;
+				transform.zoom *= scale;
+				transform.zoom = Math.max(0.1, Math.min(10, transform.zoom));
+
+				transform.x = mX - (mX - transform.x) * (transform.zoom / oZ);
+				transform.y = mY - (mY - transform.y) * (transform.zoom / oZ);
+
+				initialPinchDistance = currentDistance;
+				drawPreview();
+			}
+		}, { passive: false });
+
+		previewCanvas.addEventListener("touchend", e => {
+			if (e.touches.length < 2) {
+				initialPinchDistance = null;
+			}
+			if (e.touches.length < 1) {
+				isPanning = false;
+			}
+			// If a pinch ends and one finger remains, start panning from that finger's position
+			if (e.touches.length === 1) {
+				isPanning = true;
+				lastMousePos = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+			}
+		});
+
+
 		window.addEventListener("resize", drawPreview);
 		showTransitionsCheckbox.addEventListener("change", drawPreview);
 
@@ -519,8 +580,7 @@
 					cctx.drawImage(buildWavyCornerMaskCanvas(blendW, blendH, which, sWidth, sHeight, dstX, dstY), 0, 0);
 				} else if (mode === "perlin") {
 					cctx.drawImage(buildPerlinCornerMaskCanvas(blendW, blendH, which, sWidth, sHeight, dstX, dstY), 0, 0);
-				}
-				else {
+				} else {
 					drawCornerLinearMask(cctx, blendW, blendH, which);
 				}
 				cctx.globalCompositeOperation = "source-over";
