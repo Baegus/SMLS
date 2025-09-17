@@ -276,12 +276,26 @@
 		});
 		dropZone.addEventListener("drop", e => {
 			e.preventDefault();
+			e.stopPropagation(); // Prevent window handler from firing too
 			dropZone.style.borderColor = "#dfe1e6";
 			if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
 		});
 		imageInput.addEventListener("change", e => {
 			if (e.target.files.length) handleFile(e.target.files[0]);
 		});
+
+		// Make the entire page a drop zone
+		window.addEventListener("dragover", e => {
+			e.preventDefault();
+		});
+
+		window.addEventListener("drop", e => {
+			e.preventDefault();
+			if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+				handleFile(e.dataTransfer.files[0]);
+			}
+		});
+
 
 		const handleParamChange = () => generateSeamlessTexture();
 		blendSlider.addEventListener("input", () => {
@@ -435,7 +449,21 @@
 					downloadBtn.disabled = false;
 
 					if (cropper) cropper.destroy();
-					cropper = new Cropper(imageToCrop, { viewMode: 1, background: false, autoCropArea: 0.8, crop: generateSeamlessTexture });
+					cropper = new Cropper(imageToCrop, {
+						viewMode: 1,
+						background: false,
+						zoomable: false,
+						crop: generateSeamlessTexture,
+						ready: function () {
+							// `this.cropper` is the cropper instance
+							this.cropper.setData({
+								x: 0,
+								y: 0,
+								width: sourceImage.naturalWidth * 0.9,
+								height: sourceImage.naturalHeight * 0.9,
+							});
+						}
+					});
 					imageToCrop.classList.add("loaded");
 				};
 				sourceImage.src = e.target.result;
