@@ -5,7 +5,8 @@
 	<meta charset="UTF-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1.0">
 	<title>SMLS - Seamless Tiling Image Editor</title>
-	<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.2/cropper.min.css">
+	<script src="https://cdn.jsdelivr.net/npm/file-saver@2.0.5/dist/FileSaver.min.js"></script>
+	<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/cropperjs@1.6.2/dist/cropper.min.css">
 	<style>
 		body {
 			font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -220,7 +221,7 @@
 		</div>
 	</div>
 
-	<script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.2/cropper.min.js"></script>
+	<script src="https://cdn.jsdelivr.net/npm/cropperjs@1.6.2/dist/cropper.min.js"></script>
 	<script>
 		// --- PERLIN NOISE GENERATOR ---
 		// Based on implementation by Ken Perlin
@@ -291,6 +292,8 @@
 		let isPanning = false;
 		let lastMousePos = { x: 0, y: 0 };
 		let initialPinchDistance = null;
+		let uploadedFileName = 'image';
+		let currentObjectUrl = null;
 
 		// --- Event Listeners ---
 		dropZone.addEventListener("click", () => imageInput.click());
@@ -353,14 +356,14 @@
 
 		downloadBtn.addEventListener("click", () => {
 			if (!finalTileCanvas) return;
-			const a = document.createElement("a");
-			a.download = "seamless-texture.png";
-			a.href = finalTileCanvas.toDataURL("image/png");
-			a.click();
+			const fileName = `SMLS_${finalTileCanvas.width}x${finalTileCanvas.height}_${uploadedFileName}.png`;
+			finalTileCanvas.toBlob(function (blob) {
+				saveAs(blob, fileName);
+			}, "image/png");
 		});
 
 		resetBtn.addEventListener("click", () => {
-			if (confirm("Are you sure you want to dicard the current image?")) {
+			if (confirm("Are you sure you want to discard the current image?")) {
 				resetTool();
 			}
 		});
@@ -466,44 +469,53 @@
 		}
 
 		function handleFile(file) {
-			imageToCrop.classList.remove("loaded");
-			const reader = new FileReader();
-			reader.onload = e => {
-				sourceImage = new Image();
-				sourceImage.onload = () => {
-					imageToCrop.src = e.target.result;
-					dropZone.style.display = "none";
-					algoContainer.style.display = "block";
-					blendSliderContainer.style.display = "block";
-					// Show correct sliders for default mode
-					const mode = blendModeSelect.value;
-					wavinessContainer.style.display = mode === "wavy" ? "block" : "none";
-					perlinScaleContainer.style.display = mode === "perlin" ? "block" : "none";
-					perlinOctavesContainer.style.display = mode === "perlin" ? "block" : "none";
-					downloadBtn.disabled = false;
-					resetBtn.style.display = "block";
+			if (!file.type.startsWith("image/")) return;
 
-					if (cropper) cropper.destroy();
-					cropper = new Cropper(imageToCrop, {
-						viewMode: 1,
-						background: false,
-						zoomable: false,
-						crop: generateSeamlessTexture,
-						ready: function () {
-							// `this.cropper` is the cropper instance
-							this.cropper.setData({
-								x: 0,
-								y: 0,
-								width: sourceImage.naturalWidth * 0.9,
-								height: sourceImage.naturalHeight * 0.9,
-							});
-						}
-					});
-					imageToCrop.classList.add("loaded");
-				};
-				sourceImage.src = e.target.result;
+			// Revoke the old object URL to free up memory
+			if (currentObjectUrl) {
+				URL.revokeObjectURL(currentObjectUrl);
+			}
+
+			// Store filename for download
+			uploadedFileName = file.name.replace(/\.[^/.]+$/, "");
+
+			// Create a new object URL for the uploaded file
+			currentObjectUrl = URL.createObjectURL(file);
+
+			imageToCrop.classList.remove("loaded");
+			sourceImage = new Image();
+			sourceImage.onload = () => {
+				imageToCrop.src = currentObjectUrl;
+				dropZone.style.display = "none";
+				algoContainer.style.display = "block";
+				blendSliderContainer.style.display = "block";
+				// Show correct sliders for default mode
+				const mode = blendModeSelect.value;
+				wavinessContainer.style.display = mode === "wavy" ? "block" : "none";
+				perlinScaleContainer.style.display = mode === "perlin" ? "block" : "none";
+				perlinOctavesContainer.style.display = mode === "perlin" ? "block" : "none";
+				downloadBtn.disabled = false;
+				resetBtn.style.display = "block";
+
+				if (cropper) cropper.destroy();
+				cropper = new Cropper(imageToCrop, {
+					viewMode: 1,
+					background: false,
+					zoomable: false,
+					crop: generateSeamlessTexture,
+					ready: function () {
+						// `this.cropper` is the cropper instance
+						this.cropper.setData({
+							x: 0,
+							y: 0,
+							width: sourceImage.naturalWidth * 0.9,
+							height: sourceImage.naturalHeight * 0.9,
+						});
+					}
+				});
+				imageToCrop.classList.add("loaded");
 			};
-			reader.readAsDataURL(file);
+			sourceImage.src = currentObjectUrl;
 		}
 
 		function resetTool() {
@@ -534,10 +546,16 @@
 				previewCtx.clearRect(0, 0, previewCanvas.width, previewCanvas.height);
 			}
 
+			if (currentObjectUrl) {
+				URL.revokeObjectURL(currentObjectUrl);
+			}
+
 			// Reset state variables
 			finalTileCanvas = null;
 			transitionOnlyCanvas = null;
 			sourceImage = null;
+			currentObjectUrl = null;
+			uploadedFileName = "image";
 			transform = { x: 0, y: 0, zoom: 1 };
 
 			// Allow re-uploading the same file
