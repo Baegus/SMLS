@@ -78,7 +78,14 @@
 			background-color: #eaf2ff;
 		}
 
-		.controls,
+		.controls {
+			margin-top: 20px;
+			display: flex;
+			flex-wrap: wrap;
+			gap: 10px;
+			align-items: center;
+		}
+
 		.slider-control {
 			margin-top: 20px;
 		}
@@ -132,6 +139,16 @@
 		button:hover:not(:disabled) {
 			background-color: #003b95;
 		}
+
+		#reset-btn {
+			background-color: #dfe1e6;
+			color: #172b4d;
+			font-weight: 600;
+		}
+
+		#reset-btn:hover:not(:disabled) {
+			background-color: #c1c7d0;
+		}
 	</style>
 </head>
 
@@ -178,6 +195,7 @@
 
 		<div class="controls">
 			<button id="download-btn" disabled>Download Tile (PNG)</button>
+			<button id="reset-btn" style="display: none;">Try another image</button>
 		</div>
 	</div>
 
@@ -238,6 +256,7 @@
 		const imageInput = document.getElementById("image-input");
 		const imageToCrop = document.getElementById("image-to-crop");
 		const downloadBtn = document.getElementById("download-btn");
+		const resetBtn = document.getElementById("reset-btn");
 		const previewCanvas = document.getElementById("preview-canvas");
 		const previewCtx = previewCanvas.getContext("2d");
 		const showTransitionsCheckbox = document.getElementById("show-transitions");
@@ -331,6 +350,13 @@
 			a.href = finalTileCanvas.toDataURL("image/png");
 			a.click();
 		});
+
+		resetBtn.addEventListener("click", () => {
+			if (confirm("Are you sure you want to dicard the current image?")) {
+				resetTool();
+			}
+		});
+
 
 		// ---- Preview controls (Mouse)
 		previewCanvas.addEventListener("wheel", handleZoom, { passive: false });
@@ -447,6 +473,7 @@
 					perlinScaleContainer.style.display = mode === "perlin" ? "block" : "none";
 					perlinOctavesContainer.style.display = mode === "perlin" ? "block" : "none";
 					downloadBtn.disabled = false;
+					resetBtn.style.display = "block";
 
 					if (cropper) cropper.destroy();
 					cropper = new Cropper(imageToCrop, {
@@ -469,6 +496,44 @@
 				sourceImage.src = e.target.result;
 			};
 			reader.readAsDataURL(file);
+		}
+
+		function resetTool() {
+			// Destroy cropper
+			if (cropper) {
+				cropper.destroy();
+				cropper = null;
+			}
+
+			// Reset DOM visibility
+			imageToCrop.src = "";
+			imageToCrop.classList.remove("loaded");
+			dropZone.style.display = "block";
+
+			// Hide all sliders and algo selector
+			algoContainer.style.display = "none";
+			blendSliderContainer.style.display = "none";
+			wavinessContainer.style.display = "none";
+			perlinScaleContainer.style.display = "none";
+			perlinOctavesContainer.style.display = "none";
+
+			// Reset button states
+			downloadBtn.disabled = true;
+			resetBtn.style.display = "none";
+
+			// Clear preview
+			if (previewCanvas.width > 0 && previewCanvas.height > 0) {
+				previewCtx.clearRect(0, 0, previewCanvas.width, previewCanvas.height);
+			}
+
+			// Reset state variables
+			finalTileCanvas = null;
+			transitionOnlyCanvas = null;
+			sourceImage = null;
+			transform = { x: 0, y: 0, zoom: 1 };
+
+			// Allow re-uploading the same file
+			imageInput.value = null;
 		}
 
 		// ---- Tile generation
