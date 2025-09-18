@@ -4,31 +4,64 @@
 <head>
 	<meta charset="UTF-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1.0">
-	<title>SMLS - Seamless Tiling Image Editor</title>
+	<title>SMLS: Make any image a seamless tile</title>
 	<script src="https://cdn.jsdelivr.net/npm/file-saver@2.0.5/dist/FileSaver.min.js"></script>
 	<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/cropperjs@1.6.2/dist/cropper.min.css">
 	<style>
+		:root {
+			/* Core color palette */
+			--secondary: rgb(43, 55, 89);
+			--primary: rgb(255, 170, 19);
+			--neutral-white: rgb(255, 255, 255);
+			--neutral-gray: rgb(151, 151, 151);
+			
+			/* Derived colors */
+			--background-dark: color-mix(in srgb, var(--secondary) 70%, black);
+			--text-light: var(--neutral-white);
+			--container-bg: var(--secondary);
+			--container-shadow: rgba(0, 0, 0, 0.3);
+			--preview-bg: color-mix(in srgb, var(--neutral-gray) 30%, white);
+			--grid-light: var(--neutral-gray);
+			--grid-dark: color-mix(in srgb, var(--neutral-gray) 90%, black);
+			--drop-zone-border: color-mix(in srgb, var(--secondary) 80%, var(--neutral-gray));
+			--drop-zone-bg: color-mix(in srgb, var(--secondary) 95%, black);
+			--drop-zone-hover-border: var(--primary);
+			--drop-zone-hover-bg: color-mix(in srgb, var(--secondary) 70%, var(--neutral-gray));
+			--button-primary-bg: var(--primary);
+			--button-primary-hover-bg: color-mix(in srgb, var(--primary) 85%, black);
+			--button-primary-text: var(--secondary);
+			--button-disabled-bg: color-mix(in srgb, var(--secondary) 50%, var(--neutral-gray));
+			--button-disabled-text: color-mix(in srgb, var(--neutral-gray) 60%, white);
+			--reset-btn-bg: color-mix(in srgb, var(--secondary) 80%, var(--neutral-gray));
+			--reset-btn-hover-bg: color-mix(in srgb, var(--secondary) 70%, var(--neutral-gray));
+		}
+
 		body {
 			font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 			display: flex;
 			flex-wrap: wrap;
 			justify-content: center;
 			align-items: flex-start;
+			margin: 0;
 			gap: 30px;
 			padding: 20px;
-			background-color: #f4f5f7;
-			color: #172b4d;
+			background-color: var(--background-dark);
+			color: var(--text-light);
 			line-height: 1.5;
+			padding-top: 80px;
 		}
 
 		body * {
 			user-select: none;
 		}
 
+		h2 {
+			margin-top: 0;
+		}
+
 		.container {
-			background-color: #ffffff;
-			border-radius: 8px;
-			box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+			background-color: var(--container-bg);
+			box-shadow: 0 4px 12px var(--container-shadow);
 			padding: 20px;
 			width: 100%;
 			max-width: 500px;
@@ -39,10 +72,8 @@
 			cursor: grab;
 			overflow: hidden;
 			position: relative;
-			border-radius: 4px;
-			background-color: #dfe1e6;
+			background-color: var(--preview-bg);
 			touch-action: none;
-			/* Prevents default browser actions like scroll/zoom on touch */
 		}
 
 		#preview-container:active {
@@ -58,8 +89,8 @@
 		#preview-canvas,
 		.cropper-container {
 			background: repeating-conic-gradient(
-				#979797 0 25%,
-				#878787 0 50%
+				var(--grid-light) 0 25%,
+				var(--grid-dark) 0 50%
 			) 50% / 20px 20px;
 		}
 
@@ -73,18 +104,17 @@
 		}
 
 		#drop-zone {
-			border: 2px dashed #dfe1e6;
-			border-radius: 8px;
-			padding: 40px 20px;
-			text-align: center;
-			cursor: pointer;
-			background-color: #fafbfc;
-			transition: background-color 0.2s, border-color 0.2s;
+			border: 2px dashed var(--drop-zone-border);
+			background-color: var(--drop-zone-bg);
+			color: var(--text-light);
+			padding-left: 10px;
+			box-sizing: border-box;
+			transition: all .2s;
 		}
 
 		#drop-zone:hover {
-			border-color: #0052cc;
-			background-color: #eaf2ff;
+			border-color: var(--drop-zone-hover-border);
+			background-color: var(--drop-zone-hover-bg);
 		}
 
 		.controls {
@@ -104,69 +134,213 @@
 		}
 
 		#algo-container {
-			display: none
+			display: none;
 		}
 
 		label {
-			font-weight: 600
+			font-weight: 600;
 		}
 
 		.slider-control label {
 			display: block;
-			margin-bottom: 8px
+			margin-bottom: 8px;
 		}
 
 		.slider-control input[type="range"] {
+			appearance: none;
+			-webkit-appearance: none;
+			margin: 0;
 			width: 100%;
-			cursor: pointer
+			height: 25px;
+			background: var(--reset-btn-bg);
+			outline: none;
+		}
+
+		.slider-control input[type="range"]::-webkit-slider-thumb {
+			-webkit-appearance: none;
+			appearance: none;
+			width: 25px;
+			height: 25px;
+			background: var(--button-primary-bg);
+			cursor: pointer;
+		}
+
+		.slider-control input[type="range"]::-webkit-slider-thumb:active {
+			background: var(--button-primary-hover-bg);
+		}
+
+		.slider-control input[type="range"]::-moz-range-thumb:active {
+			background: var(--button-primary-hover-bg);
+		}
+
+		.slider-control input[type="range"]::-moz-range-thumb {
+			width: 25px;
+			height: 25px;
+			background: var(--button-primary-bg);
+			cursor: pointer;
 		}
 
 		select {
 			width: 100%;
 			padding: 8px 10px;
-			border-radius: 6px;
-			border: 1px solid #dfe1e6;
-			margin-top: 8px
+			border: 1px solid var(--preview-bg);
+			margin-top: 8px;
 		}
 
 		button {
 			font-size: 14px;
 			padding: 10px 16px;
+			font-weight: 600;
 			border: none;
-			background-color: #0052cc;
-			color: white;
+			background-color: var(--button-primary-bg);
+			color: var(--button-primary-text);
 			cursor: pointer;
-			border-radius: 5px;
 			transition: background-color 0.2s;
 		}
 
 		button:disabled {
-			background-color: #a5adba;
+			background-color: var(--button-disabled-bg);
+			color: var(--button-disabled-text);
 			cursor: not-allowed;
 		}
 
 		button:hover:not(:disabled) {
-			background-color: #003b95;
+			background-color: var(--button-primary-hover-bg);
 		}
 
 		#reset-btn {
-			background-color: #dfe1e6;
-			color: #172b4d;
-			font-weight: 600;
+			background-color: var(--reset-btn-bg);
+			color: var(--text-light);
 		}
 
 		#reset-btn:hover:not(:disabled) {
-			background-color: #c1c7d0;
+			background-color: var(--reset-btn-hover-bg);
 		}
+
+		/* Header styles */
+		header {
+			position: fixed;
+			top: 0;
+			left: 0;
+			right: 0;
+			height: 60px;
+			background-color: var(--container-bg);
+			box-shadow: 0 2px 8px var(--container-shadow);
+			display: flex;
+			align-items: center;
+			justify-content: space-between;
+			padding: 0 20px;
+			z-index: 1000;
+		}
+
+		.header-left {
+			display: flex;
+			align-items: center;
+			gap: 12px;
+		}
+
+		.logo {
+			width: 40px;
+			height: 40px;
+			background: url('logo.svg') center/contain no-repeat;
+			background-color: var(--secondary);
+			padding: 5px;
+			border-radius: 4px;
+			flex-shrink: 0;
+		}
+
+		.app-title {
+			font-size: 18px;
+			font-weight: 600;
+			color: var(--text-light);
+			margin: 0;
+		}
+
+		.header-right {
+			color: var(--neutral-gray);
+			font-size: 14px;
+		}
+
+		.header-right span:first-child::after {
+			content: " | ";
+		}
+
+		.header-right a {
+			color: var(--primary);
+			text-decoration: none;
+		}
+
+		.header-right a:hover {
+			text-decoration: underline;
+		}
+
+		@media(max-width: 720px) {
+			body {
+				padding: 75px 0 0 0;
+			}
+
+			h2 {
+				font-size: 18px;
+			}
+
+			header {
+				padding: 0 7px;
+			}
+
+			.header-left {
+				gap: 8px;
+			}
+
+			.logo {
+				width: 30px;
+				height: 30px;
+			}
+			.app-title {
+				font-size: 16px;
+			}
+
+			.subtitle {
+				font-size: 12px;
+				display: block;
+			}
+
+			.header-right {
+				font-size: 12px;
+			}
+
+			.header-right span {
+				display: block;
+			}
+
+			.header-right span::after {
+				display: none;
+			}
+
+			.container {
+				padding: 15px;
+				max-width: 100%;
+			}
+		}
+
 	</style>
 </head>
 
 <body>
+	<header>
+		<div class="header-left">
+			<div class="logo"></div>
+			<h1 class="app-title">SMLS: <span class="subtitle">Make any image a&nbsp;seamless&nbsp;tile</span></h1>
+		</div>
+		<div class="header-right">
+			<span>Made by <a href="https://baegus.cz" target="_blank">Baegus</a></span>
+			<span>Star on <a href="https://github.com/Baegus/SMLS" target="_blank">GitHub</a></span>
+		</div>
+	</header>
 
 	<div id="editor-container" class="container">
-		<h2>1. Upload & Crop Image</h2>
+		<h2>Upload & Crop Image</h2>
 		<div id="drop-zone">
-			<p>Drag & Drop an image here or click</p>
+			<p>Drag & Drop your image anywhere or click&nbsp;here</p>
 			<input type="file" id="image-input" accept="image/*" style="display: none;">
 		</div>
 
@@ -209,7 +383,7 @@
 	</div>
 
 	<div class="container">
-		<h2>2. Preview (Pan & Zoom)</h2>
+		<h2>Preview (Pan & Zoom)</h2>
 		<div id="preview-container">
 			<canvas id="preview-canvas"></canvas>
 		</div>
