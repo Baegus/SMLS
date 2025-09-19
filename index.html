@@ -399,6 +399,18 @@
 
 	<script src="https://cdn.jsdelivr.net/npm/cropperjs@1.6.2/dist/cropper.min.js"></script>
 	<script>
+		function debounce(func, getWait) {
+			let timeout;
+			return function executedFunction(...args) {
+				const later = () => {
+					clearTimeout(timeout);
+					func(...args);
+				};
+				clearTimeout(timeout);
+				const wait = typeof getWait === "function" ? getWait() : getWait;
+				timeout = setTimeout(later, wait);
+			};
+		}
 		// --- PERLIN NOISE GENERATOR ---
 		// Based on implementation by Ken Perlin
 		class PerlinNoise {
@@ -502,8 +514,16 @@
 			}
 		});
 
+		let megapixels = 0;
+		const debouncedGenerateTexture = debounce(generateSeamlessTexture, () => {
+			// Dynamic debounce delay based on image size
+			if (!sourceImage) return 200; // default fallback
+			if (megapixels < 1) return 10;
+			if (megapixels < 4) return 100;
+			return 300;
+		});
 
-		const handleParamChange = () => generateSeamlessTexture();
+		const handleParamChange = () => debouncedGenerateTexture();
 		blendSlider.addEventListener("input", () => {
 			blendValueSpan.textContent = blendSlider.value;
 			handleParamChange();
@@ -678,9 +698,8 @@
 					viewMode: 1,
 					background: false,
 					zoomable: false,
-					crop: generateSeamlessTexture,
+					crop: debouncedGenerateTexture,
 					ready: function () {
-						// `this.cropper` is the cropper instance
 						this.cropper.setData({
 							x: 0,
 							y: 0,
@@ -690,6 +709,7 @@
 					}
 				});
 				imageToCrop.classList.add("loaded");
+				megapixels = (sourceImage.naturalWidth * sourceImage.naturalHeight) / 1_000_000;
 			};
 			sourceImage.src = currentObjectUrl;
 		}
