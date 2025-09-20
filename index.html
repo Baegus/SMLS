@@ -831,8 +831,7 @@
 		 */
 		async function findBestCrop() {
 			if (!sourceImage || !cropper) return;
-
-			const findBtn = document.getElementById('find-pattern-btn');
+			
 			const originalText = findBtn.innerHTML;
 			findBtn.disabled = true;
 			findBtn.innerHTML = 'Analyzing...';
