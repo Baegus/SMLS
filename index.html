@@ -125,6 +125,11 @@
 			align-items: center;
 		}
 
+		#find-pattern-btn {
+			margin-left: auto;
+			font-size: 12px;
+		}
+
 		#crop-size-container input[type="number"] {
 			width: 40px;
 			padding: 8px 10px;
@@ -340,6 +345,12 @@
 			}
 		}
 
+		@media(max-width: 420px) {
+			#find-pattern-btn {
+				margin-left: 0;
+				margin-right: 50%;
+			}			
+		}
 	</style>
 </head>
 
@@ -369,6 +380,7 @@
 			<span>×</span>
 			<input type="number" id="crop-height-input" min="1">
 			<span> px</span>
+			<button id="find-pattern-btn" title="Automatically find repeating pattern size">Auto-Find Pattern</button>
 		</div>
 		
 		<div id="algo-container" class="controls">
@@ -810,6 +822,168 @@
 			// Allow re-uploading the same file
 			imageInput.value = null;
 		}
+
+		// --- Automatic Pattern Detection ---
+
+		const findBtn = document.getElementById('find-pattern-btn');
+		/**
+		 * Kicks off the two-pass (coarse and fine) pattern detection process.
+		 */
+		async function findBestCrop() {
+			if (!sourceImage || !cropper) return;
+
+			const findBtn = document.getElementById('find-pattern-btn');
+			const originalText = findBtn.innerHTML;
+			findBtn.disabled = true;
+			findBtn.innerHTML = 'Analyzing...';
+
+			await new Promise(resolve => setTimeout(resolve, 10)); // Allow UI to update
+
+			// --- Create Grayscale Data (both low-res and full-res) ---
+			const MAX_DIM = 256;
+			const MIN_CROP_FACTOR = 0.5;
+
+			// Low-res canvas for coarse search
+			const coarseCanvas = document.createElement('canvas');
+			const coarseCtx = coarseCanvas.getContext('2d', { willReadFrequently: true });
+			const scale = Math.min(1, MAX_DIM / sourceImage.naturalWidth, MAX_DIM / sourceImage.naturalHeight);
+			const coarseW = Math.round(sourceImage.naturalWidth * scale);
+			const coarseH = Math.round(sourceImage.naturalHeight * scale);
+			coarseCanvas.width = coarseW;
+			coarseCanvas.height = coarseH;
+			coarseCtx.drawImage(sourceImage, 0, 0, coarseW, coarseH);
+			const coarseGrayData = getGrayscaleData(coarseCtx, coarseW, coarseH);
+
+			// Full-res canvas for fine search
+			const fullCanvas = document.createElement('canvas');
+			const fullCtx = fullCanvas.getContext('2d', { willReadFrequently: true });
+			const fullW = sourceImage.naturalWidth;
+			const fullH = sourceImage.naturalHeight;
+			fullCanvas.width = fullW;
+			fullCanvas.height = fullH;
+			fullCtx.drawImage(sourceImage, 0, 0, fullW, fullH);
+			const fullGrayData = getGrayscaleData(fullCtx, fullW, fullH);
+
+			const targetWidth = coarseW * MIN_CROP_FACTOR;
+			const targetHeight = coarseH * MIN_CROP_FACTOR;
+
+			const { periodX, periodY } = findPeriodicity(
+				coarseGrayData, coarseW, coarseH, targetWidth, targetHeight,
+				fullGrayData, fullW, fullH, scale
+			);
+
+			if (periodX > 10 && periodY > 10) {
+				const currentData = cropper.getData();
+				cropper.setData({
+					...currentData,
+					width: periodX,
+					height: periodY,
+				});
+			} else {
+				alert("Could not automatically detect a repeating pattern. Please select the crop area manually.");
+			}
+
+			findBtn.disabled = false;
+			findBtn.innerHTML = originalText;
+		}
+
+		/**
+		 * Helper function to convert canvas context to a grayscale Uint8Array.
+		 */
+		function getGrayscaleData(ctx, width, height) {
+			const imageData = ctx.getImageData(0, 0, width, height);
+			const data = imageData.data;
+			const grayData = new Uint8Array(width * height);
+			for (let i = 0; i < data.length; i += 4) {
+				const gray = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+				grayData[i / 4] = gray;
+			}
+			return grayData;
+		}
+
+		/**
+		 * Performs a two-pass search for the pattern period.
+		 */
+		function findPeriodicity(coarseGray, coarseW, coarseH, targetX, targetY, fullGray, fullW, fullH, scale) {
+			const minShift = 10;
+
+			// --- Pass 1: Coarse search on downscaled image ---
+			const estimateX = findBestShift(coarseGray, coarseW, coarseH, 'horizontal', targetX, minShift);
+			const estimateY = findBestShift(coarseGray, coarseW, coarseH, 'vertical', targetY, minShift);
+
+			// Scale up the estimate to full resolution dimensions
+			const scaledEstimateX = Math.round(estimateX / scale);
+			const scaledEstimateY = Math.round(estimateY / scale);
+
+			// --- Pass 2: Fine search on full-resolution image around the estimate ---
+			const searchRadius = 30; // Search +/- 30px around the estimate. Should be larger than the error.
+
+			const fineTargetX = Math.max(minShift, scaledEstimateX - searchRadius);
+			const periodX = findBestShift(fullGray, fullW, fullH, 'horizontal', fineTargetX, minShift, scaledEstimateX + searchRadius);
+
+			const fineTargetY = Math.max(minShift, scaledEstimateY - searchRadius);
+			const periodY = findBestShift(fullGray, fullW, fullH, 'vertical', fineTargetY, minShift, scaledEstimateY + searchRadius);
+
+			return { periodX, periodY };
+		}
+
+		/**
+		 * Core logic to calculate Sum of Absolute Differences (SAD) and find the best shift.
+		 */
+		function findBestShift(grayData, width, height, direction, targetSize, minShift, searchEnd = null) {
+			const searchLimit = searchEnd || Math.floor((direction === 'horizontal' ? width : height) * 0.95);
+
+			const sadScores = [];
+			for (let shift = minShift; shift < searchLimit; shift++) {
+				let sumDiff = 0;
+				if (direction === 'horizontal') {
+					for (let y = 0; y < height; y += 4) { // Sample rows for speed
+						for (let x = 0; x < width - shift; x++) {
+							const idx1 = y * width + x;
+							const idx2 = idx1 + shift;
+							sumDiff += Math.abs(grayData[idx1] - grayData[idx2]);
+						}
+					}
+				} else { // vertical
+					for (let x = 0; x < width; x += 4) { // Sample columns for speed
+						for (let y = 0; y < height - shift; y++) {
+							const idx1 = y * width + x;
+							const idx2 = idx1 + (shift * width);
+							sumDiff += Math.abs(grayData[idx1] - grayData[idx2]);
+						}
+					}
+				}
+				sadScores.push({ shift, score: sumDiff });
+			}
+
+			if (sadScores.length === 0) return 0;
+
+			// If it's a fine search (searchEnd is defined), just find the absolute best score.
+			if (searchEnd !== null) {
+				return sadScores.reduce((min, p) => p.score < min.score ? p : min, sadScores[0]).shift;
+			}
+
+			// Otherwise, it's a coarse search. Find local minima and prefer larger sizes.
+			const localMinima = [];
+			for (let i = 1; i < sadScores.length - 1; i++) {
+				if (sadScores[i].score < sadScores[i - 1].score && sadScores[i].score < sadScores[i + 1].score) {
+					localMinima.push(sadScores[i].shift);
+				}
+			}
+
+			if (localMinima.length > 0) {
+				const candidates = localMinima.filter(p => p >= targetSize);
+				if (candidates.length > 0) {
+					return candidates[0]; // Smallest period that meets the size requirement
+				}
+				return localMinima[localMinima.length - 1]; // Fallback to largest found period
+			}
+
+			// Absolute fallback: global minimum if no local ones were found
+			return sadScores.reduce((min, p) => p.score < min.score ? p : min, sadScores[0]).shift;
+		}
+
+		findBtn.addEventListener('click', findBestCrop);
 
 		// ---- Tile generation
 		function generateSeamlessTexture() {
