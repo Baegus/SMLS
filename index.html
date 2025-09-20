@@ -264,7 +264,7 @@
 		.logo {
 			width: 40px;
 			height: 40px;
-			background: url('logo.svg') center/contain no-repeat;
+			background: url("logo.svg") center/contain no-repeat;
 			background-color: var(--secondary);
 			padding: 5px;
 			border-radius: 4px;
@@ -519,7 +519,7 @@
 		let isPanning = false;
 		let lastMousePos = { x: 0, y: 0 };
 		let initialPinchDistance = null;
-		let uploadedFileName = 'image';
+		let uploadedFileName = "image";
 		let currentObjectUrl = null;
 
 		// --- Event Listeners ---
@@ -574,8 +574,8 @@
 			});
 		};
 		const debouncedSizeChange = debounce(handleSizeInputChange, 300);
-		cropWidthInput.addEventListener('input', debouncedSizeChange);
-		cropHeightInput.addEventListener('input', debouncedSizeChange);
+		cropWidthInput.addEventListener("input", debouncedSizeChange);
+		cropHeightInput.addEventListener("input", debouncedSizeChange);
 
 		let megapixels = 0;
 		const debouncedGenerateTexture = debounce(generateSeamlessTexture, () => {
@@ -633,8 +633,11 @@
 		previewCanvas.addEventListener("mousedown", e => {
 			isPanning = true;
 			lastMousePos = { x: e.clientX, y: e.clientY };
+			document.body.style.cursor = "grabbing";
 		});
-		previewCanvas.addEventListener("mousemove", e => {
+		
+		// Attach mousemove and mouseup to document so panning works even when leaving the canvas
+		document.addEventListener("mousemove", e => {
 			if (!isPanning) return;
 			const dx = e.clientX - lastMousePos.x, dy = e.clientY - lastMousePos.y;
 			transform.x += dx;
@@ -642,8 +645,18 @@
 			lastMousePos = { x: e.clientX, y: e.clientY };
 			drawPreview();
 		});
-		previewCanvas.addEventListener("mouseup", () => isPanning = false);
-		previewCanvas.addEventListener("mouseleave", () => isPanning = false);
+		document.addEventListener("mouseup", () => {
+			isPanning = false;
+			document.body.style.cursor = "";
+		});
+		
+		// Reset panning state when mouse enters canvas if button is not pressed
+		previewCanvas.addEventListener("mouseenter", e => {
+			if ((e.buttons & 1) === 0) {
+				isPanning = false;
+				document.body.style.cursor = "";
+			}
+		});
 
 		// ---- Preview controls (Touch)
 		previewCanvas.addEventListener("touchstart", e => {
@@ -833,7 +846,7 @@
 
 		// --- Automatic Pattern Detection ---
 
-		const findBtn = document.getElementById('find-pattern-btn');
+		const findBtn = document.getElementById("find-pattern-btn");
 		/**
 		 * Kicks off the two-pass (coarse and fine) pattern detection process.
 		 */
@@ -848,7 +861,7 @@
 			
 			const originalText = findBtn.innerHTML;
 			findBtn.disabled = true;
-			findBtn.innerHTML = 'Analyzing...';
+			findBtn.innerHTML = "Analyzing...";
 
 			await new Promise(resolve => setTimeout(resolve, 10)); // Allow UI to update
 
@@ -857,8 +870,8 @@
 			const MIN_CROP_FACTOR = 0.5;
 
 			// Low-res canvas for coarse search
-			const coarseCanvas = document.createElement('canvas');
-			const coarseCtx = coarseCanvas.getContext('2d', { willReadFrequently: true });
+			const coarseCanvas = document.createElement("canvas");
+			const coarseCtx = coarseCanvas.getContext("2d", { willReadFrequently: true });
 			const scale = Math.min(1, MAX_DIM / sourceImage.naturalWidth, MAX_DIM / sourceImage.naturalHeight);
 			const coarseW = Math.round(sourceImage.naturalWidth * scale);
 			const coarseH = Math.round(sourceImage.naturalHeight * scale);
@@ -868,8 +881,8 @@
 			const coarseGrayData = getGrayscaleData(coarseCtx, coarseW, coarseH);
 
 			// Full-res canvas for fine search
-			const fullCanvas = document.createElement('canvas');
-			const fullCtx = fullCanvas.getContext('2d', { willReadFrequently: true });
+			const fullCanvas = document.createElement("canvas");
+			const fullCtx = fullCanvas.getContext("2d", { willReadFrequently: true });
 			const fullW = sourceImage.naturalWidth;
 			const fullH = sourceImage.naturalHeight;
 			fullCanvas.width = fullW;
@@ -921,8 +934,8 @@
 			const minShift = 10;
 
 			// --- Pass 1: Coarse search on downscaled image ---
-			const estimateX = findBestShift(coarseGray, coarseW, coarseH, 'horizontal', targetX, minShift);
-			const estimateY = findBestShift(coarseGray, coarseW, coarseH, 'vertical', targetY, minShift);
+			const estimateX = findBestShift(coarseGray, coarseW, coarseH, "horizontal", targetX, minShift);
+			const estimateY = findBestShift(coarseGray, coarseW, coarseH, "vertical", targetY, minShift);
 
 			// Scale up the estimate to full resolution dimensions
 			const scaledEstimateX = Math.round(estimateX / scale);
@@ -932,10 +945,10 @@
 			const searchRadius = 30; // Search +/- 30px around the estimate. Should be larger than the error.
 
 			const fineTargetX = Math.max(minShift, scaledEstimateX - searchRadius);
-			const periodX = findBestShift(fullGray, fullW, fullH, 'horizontal', fineTargetX, minShift, scaledEstimateX + searchRadius);
+			const periodX = findBestShift(fullGray, fullW, fullH, "horizontal", fineTargetX, minShift, scaledEstimateX + searchRadius);
 
 			const fineTargetY = Math.max(minShift, scaledEstimateY - searchRadius);
-			const periodY = findBestShift(fullGray, fullW, fullH, 'vertical', fineTargetY, minShift, scaledEstimateY + searchRadius);
+			const periodY = findBestShift(fullGray, fullW, fullH, "vertical", fineTargetY, minShift, scaledEstimateY + searchRadius);
 
 			return { periodX, periodY };
 		}
@@ -944,12 +957,12 @@
 		 * Core logic to calculate Sum of Absolute Differences (SAD) and find the best shift.
 		 */
 		function findBestShift(grayData, width, height, direction, targetSize, minShift, searchEnd = null) {
-			const searchLimit = searchEnd || Math.floor((direction === 'horizontal' ? width : height) * 0.95);
+			const searchLimit = searchEnd || Math.floor((direction === "horizontal" ? width : height) * 0.95);
 
 			const sadScores = [];
 			for (let shift = minShift; shift < searchLimit; shift++) {
 				let sumDiff = 0;
-				if (direction === 'horizontal') {
+				if (direction === "horizontal") {
 					for (let y = 0; y < height; y += 4) { // Sample rows for speed
 						for (let x = 0; x < width - shift; x++) {
 							const idx1 = y * width + x;
@@ -996,7 +1009,7 @@
 			return sadScores.reduce((min, p) => p.score < min.score ? p : min, sadScores[0]).shift;
 		}
 
-		findBtn.addEventListener('click', findBestCrop);
+		findBtn.addEventListener("click", findBestCrop);
 
 		// ---- Tile generation
 		function generateSeamlessTexture() {
