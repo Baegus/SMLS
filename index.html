@@ -553,16 +553,23 @@
 		});
 
 		const handleSizeInputChange = () => {
-			if (!cropper) return;
+			if (!cropper || !sourceImage) return;
 			const newWidth = parseInt(cropWidthInput.value, 10);
 			const newHeight = parseInt(cropHeightInput.value, 10);
 
 			if (isNaN(newWidth) || isNaN(newHeight) || newWidth <= 0 || newHeight <= 0) {
 				return; // Don't set invalid data
 			}
+
+			// Clamp the width and height to the source image dimensions
+			const clampedWidth = Math.min(newWidth, sourceImage.naturalWidth);
+			const clampedHeight = Math.min(newHeight, sourceImage.naturalHeight);
+			cropWidthInput.value = clampedWidth;
+			cropHeightInput.value = clampedHeight;
+
 			cropper.setData({
-				width: newWidth,
-				height: newHeight
+				width: clampedWidth,
+				height: clampedHeight
 			});
 		};
 		const debouncedSizeChange = debounce(handleSizeInputChange, 300);
