@@ -988,14 +988,17 @@
 		function generateSeamlessTexture() {
 			if (!cropper || !sourceImage) return;
 
+			// Use Cropper's natural-size coordinates directly.
 			const cropData = cropper.getData({ rounded: true });
-			const canvasData = cropper.getCanvasData();
-			const scale = sourceImage.naturalWidth / canvasData.naturalWidth;
 
-			const sx = (cropData.x - canvasData.left) * scale;
-			const sy = (cropData.y - canvasData.top) * scale;
-			const sWidth = Math.max(1, Math.round(cropData.width * scale));
-			const sHeight = Math.max(1, Math.round(cropData.height * scale));
+			let sx = Math.max(0, Math.round(cropData.x));
+			let sy = Math.max(0, Math.round(cropData.y));
+			let sWidth = Math.max(1, Math.round(cropData.width));
+			let sHeight = Math.max(1, Math.round(cropData.height));
+
+			// Clamp to image bounds to avoid sampling outside the source.
+			sWidth = Math.min(sWidth, sourceImage.naturalWidth - sx);
+			sHeight = Math.min(sHeight, sourceImage.naturalHeight - sy);
 
 			finalTileCanvas = document.createElement("canvas");
 			finalTileCanvas.width = sWidth;
