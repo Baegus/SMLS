@@ -125,6 +125,20 @@
 			align-items: center;
 		}
 
+		#crop-size-container input[type="number"] {
+			width: 40px;
+			padding: 8px 10px;
+			border: 1px solid var(--drop-zone-border);
+			background-color: var(--drop-zone-bg);
+			color: var(--text-light);
+			-moz-appearance: textfield;
+		}
+		#crop-size-container input[type="number"]::-webkit-outer-spin-button,
+		#crop-size-container input[type="number"]::-webkit-inner-spin-button {
+			-webkit-appearance: none;
+			margin: 0;
+		}
+
 		.slider-control {
 			margin-top: 20px;
 		}
@@ -345,9 +359,16 @@
 			<p>Drag & Drop your image anywhere or click&nbsp;here</p>
 			<input type="file" id="image-input" accept="image/*" style="display: none;">
 		</div>
-
+		
 		<div><img id="image-to-crop" alt="Source image for cropping"></div>
-
+		
+		<div id="crop-size-container" class="controls" style="display: none;">
+			<input type="number" id="crop-width-input" min="1">
+			<span>×</span>
+			<input type="number" id="crop-height-input" min="1">
+			<span> px</span>
+		</div>
+		
 		<div id="algo-container" class="controls">
 			<label for="blend-mode">Blend Algorithm</label>
 			<select id="blend-mode">
@@ -472,6 +493,9 @@
 		const perlinOctavesContainer = document.getElementById("perlin-octaves-container");
 		const perlinOctavesSlider = document.getElementById("perlin-octaves");
 		const perlinOctavesValueSpan = document.getElementById("perlin-octaves-value");
+		const cropSizeContainer = document.getElementById("crop-size-container");
+		const cropWidthInput = document.getElementById("crop-width-input");
+		const cropHeightInput = document.getElementById("crop-height-input");
 
 
 		// ---- State
@@ -513,6 +537,23 @@
 				handleFile(e.dataTransfer.files[0]);
 			}
 		});
+
+		const handleSizeInputChange = () => {
+			if (!cropper) return;
+			const newWidth = parseInt(cropWidthInput.value, 10);
+			const newHeight = parseInt(cropHeightInput.value, 10);
+
+			if (isNaN(newWidth) || isNaN(newHeight) || newWidth <= 0 || newHeight <= 0) {
+				return; // Don't set invalid data
+			}
+			cropper.setData({
+				width: newWidth,
+				height: newHeight
+			});
+		};
+		const debouncedSizeChange = debounce(handleSizeInputChange, 300);
+		cropWidthInput.addEventListener('input', debouncedSizeChange);
+		cropHeightInput.addEventListener('input', debouncedSizeChange);
 
 		let megapixels = 0;
 		const debouncedGenerateTexture = debounce(generateSeamlessTexture, () => {
@@ -683,6 +724,7 @@
 			sourceImage.onload = () => {
 				imageToCrop.src = currentObjectUrl;
 				dropZone.style.display = "none";
+				cropSizeContainer.style.display = "flex";
 				algoContainer.style.display = "block";
 				blendSliderContainer.style.display = "block";
 				// Show correct sliders for default mode
@@ -698,7 +740,15 @@
 					viewMode: 1,
 					background: false,
 					zoomable: false,
-					crop: debouncedGenerateTexture,
+					crop: () => {
+						const data = cropper.getData({ rounded: true });
+						// Update inputs ONLY if they are not the active element to prevent loops
+						if (document.activeElement !== cropWidthInput && document.activeElement !== cropHeightInput) {
+							cropWidthInput.value = data.width;
+							cropHeightInput.value = data.height;
+						}
+						debouncedGenerateTexture();
+					},
 					ready: function () {
 						this.cropper.setData({
 							x: 0,
@@ -727,6 +777,7 @@
 			dropZone.style.display = "block";
 
 			// Hide all sliders and algo selector
+			cropSizeContainer.style.display = "none";
 			algoContainer.style.display = "none";
 			blendSliderContainer.style.display = "none";
 			wavinessContainer.style.display = "none";
