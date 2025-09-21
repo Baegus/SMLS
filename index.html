@@ -880,7 +880,7 @@
 			coarseCanvas.width = coarseW;
 			coarseCanvas.height = coarseH;
 			coarseCtx.drawImage(sourceImage, 0, 0, coarseW, coarseH);
-			const coarseGrayData = getGrayscaleData(coarseCtx, coarseW, coarseH);
+			const coarseFeat = getFeatureData(coarseCtx, coarseW, coarseH);
 
 			// Full-res canvas for fine search
 			const fullCanvas = document.createElement("canvas");
@@ -890,20 +890,27 @@
 			fullCanvas.width = fullW;
 			fullCanvas.height = fullH;
 			fullCtx.drawImage(sourceImage, 0, 0, fullW, fullH);
-			const fullGrayData = getGrayscaleData(fullCtx, fullW, fullH);
+			const fullFeat = getFeatureData(fullCtx, fullW, fullH);
 
 			const targetWidth = coarseW * MIN_CROP_FACTOR;
 			const targetHeight = coarseH * MIN_CROP_FACTOR;
 
 			const { periodX, periodY } = findPeriodicity(
-				coarseGrayData, coarseW, coarseH, targetWidth, targetHeight,
-				fullGrayData, fullW, fullH, scale
+				coarseFeat, coarseW, coarseH, targetWidth, targetHeight,
+				fullFeat, fullW, fullH, scale
 			);
 
 			if (periodX > 10 && periodY > 10) {
+				const { bestX, bestY } = findBestOrigin(fullFeat, fullW, fullH, periodX, periodY);
+
+				const safeX = Math.max(0, Math.min(bestX, fullW - periodX - 1));
+				const safeY = Math.max(0, Math.min(bestY, fullH - periodY - 1));
+
 				const currentData = cropper.getData();
 				cropper.setData({
 					...currentData,
+					x: safeX,
+					y: safeY,
 					width: periodX,
 					height: periodY,
 				});
@@ -916,41 +923,138 @@
 		}
 
 		/**
-		 * Helper function to convert canvas context to a grayscale Uint8Array.
+		 * Helper: build a feature map (luma + edges) for more robust matching on organic images.
+		 * Returns a Uint8Array of the same size as the image (one byte per pixel).
 		 */
-		function getGrayscaleData(ctx, width, height) {
-			const imageData = ctx.getImageData(0, 0, width, height);
-			const data = imageData.data;
-			const grayData = new Uint8Array(width * height);
-			for (let i = 0; i < data.length; i += 4) {
-				const gray = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
-				grayData[i / 4] = gray;
+		function getFeatureData(ctx, width, height) {
+			const { data } = ctx.getImageData(0, 0, width, height);
+			const gray = new Float32Array(width * height);
+
+			// 1) Luminance (BT.601)
+			for (let i = 0, p = 0; i < data.length; i += 4, p++) {
+				gray[p] = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
 			}
-			return grayData;
+
+			// 2) Sobel edge magnitude (very lightweight)
+			const mag = new Float32Array(width * height);
+			const idx = (x, y) => y * width + x;
+			for (let y = 1; y < height - 1; y++) {
+				for (let x = 1; x < width - 1; x++) {
+					const gx = -gray[idx(x - 1, y - 1)] - 2 * gray[idx(x - 1, y)] - gray[idx(x - 1, y + 1)]
+						+ gray[idx(x + 1, y - 1)] + 2 * gray[idx(x + 1, y)] + gray[idx(x + 1, y + 1)];
+					const gy = -gray[idx(x - 1, y - 1)] - 2 * gray[idx(x, y - 1)] - gray[idx(x + 1, y - 1)]
+						+ gray[idx(x - 1, y + 1)] + 2 * gray[idx(x, y + 1)] + gray[idx(x + 1, y + 1)];
+					mag[idx(x, y)] = Math.hypot(gx, gy);
+				}
+			}
+
+			// 3) Normalize and blend: feature = 0.7*luma + 0.3*edges
+			let maxL = 1, maxE = 1;
+			for (let i = 0; i < gray.length; i++) { if (gray[i] > maxL) maxL = gray[i]; if (mag[i] > maxE) maxE = mag[i]; }
+			const out = new Uint8Array(width * height);
+			for (let i = 0; i < out.length; i++) {
+				const l = gray[i] / maxL;
+				const e = mag[i] / maxE;
+				out[i] = Math.round(255 * (0.7 * l + 0.3 * e));
+			}
+			return out;
+		}
+
+		/**
+		 * Search for the best (x,y) origin for a given period by minimizing
+		 * edge mismatches between opposing tile borders (left↔right, top↔bottom).
+		 * Uses a stride to keep it fast on large images.
+		 */
+		function findBestOrigin(feat, width, height, periodX, periodY) {
+			// Ensure we can compare edges with one neighboring tile inside the image
+			const maxX = Math.max(0, width - periodX - 1);
+			const maxY = Math.max(0, height - periodY - 1);
+
+			// Sample stride (denser for small periods, sparser for large)
+			const strideX = Math.max(1, Math.floor(periodX / 6));
+			const strideY = Math.max(1, Math.floor(periodY / 6));
+
+			let bestScore = Number.POSITIVE_INFINITY;
+			let bestX = 0, bestY = 0;
+
+			// Precompute sampling step along edges
+			const edgeSampleY = Math.max(1, Math.floor(periodY / 64));
+			const edgeSampleX = Math.max(1, Math.floor(periodX / 64));
+
+			for (let sy = 0; sy <= maxY; sy += strideY) {
+				for (let sx = 0; sx <= maxX; sx += strideX) {
+					const score = seamScore(feat, width, height, sx, sy, periodX, periodY, edgeSampleX, edgeSampleY);
+					if (score < bestScore) {
+						bestScore = score;
+						bestX = sx; bestY = sy;
+					}
+				}
+			}
+			// Optional local refinement around the best candidate
+			const refineRadiusX = Math.max(1, Math.floor(strideX / 2));
+			const refineRadiusY = Math.max(1, Math.floor(strideY / 2));
+			for (let sy = Math.max(0, bestY - refineRadiusY); sy <= Math.min(maxY, bestY + refineRadiusY); sy++) {
+				for (let sx = Math.max(0, bestX - refineRadiusX); sx <= Math.min(maxX, bestX + refineRadiusX); sx++) {
+					const score = seamScore(feat, width, height, sx, sy, periodX, periodY, edgeSampleX, edgeSampleY);
+					if (score < bestScore) { bestScore = score; bestX = sx; bestY = sy; }
+				}
+			}
+			return { bestX, bestY };
+		}
+
+		/**
+		 * Sum of Absolute Differences between opposing borders:
+		 * compares right edge vs next column (tile neighbor), and
+		 * bottom edge vs next row (tile neighbor). Lower is better.
+		 */
+		function seamScore(feat, width, height, sx, sy, wTile, hTile, stepX, stepY) {
+			let sum = 0;
+			// right edge (x = sx + wTile - 1) vs neighbor (x+1 at sx + wTile)
+			const xR = sx + wTile - 1, xN = sx + wTile;
+			if (xN < width) {
+				for (let y = sy; y < sy + hTile && y < height; y += stepY) {
+					const i1 = y * width + xR;
+					const i2 = y * width + xN;
+					sum += Math.abs(feat[i1] - feat[i2]);
+				}
+			} else {
+				sum += 1e9; // penalize invalid comparisons
+			}
+
+			// bottom edge (y = sy + hTile - 1) vs neighbor (y+1 at sy + hTile)
+			const yB = sy + hTile - 1, yN = sy + hTile;
+			if (yN < height) {
+				for (let x = sx; x < sx + wTile && x < width; x += stepX) {
+					const i1 = yB * width + x;
+					const i2 = yN * width + x;
+					sum += Math.abs(feat[i1] - feat[i2]);
+				}
+			} else {
+				sum += 1e9;
+			}
+			return sum;
 		}
 
 		/**
 		 * Performs a two-pass search for the pattern period.
 		 */
-		function findPeriodicity(coarseGray, coarseW, coarseH, targetX, targetY, fullGray, fullW, fullH, scale) {
+		function findPeriodicity(coarseFeat, coarseW, coarseH, targetX, targetY, fullFeat, fullW, fullH, scale) {
 			const minShift = 10;
 
-			// --- Pass 1: Coarse search on downscaled image ---
-			const estimateX = findBestShift(coarseGray, coarseW, coarseH, "horizontal", targetX, minShift);
-			const estimateY = findBestShift(coarseGray, coarseW, coarseH, "vertical", targetY, minShift);
+			// Pass 1 (coarse) on feature map
+			const estimateX = findBestShift(coarseFeat, coarseW, coarseH, "horizontal", targetX, minShift);
+			const estimateY = findBestShift(coarseFeat, coarseW, coarseH, "vertical", targetY, minShift);
 
-			// Scale up the estimate to full resolution dimensions
 			const scaledEstimateX = Math.round(estimateX / scale);
 			const scaledEstimateY = Math.round(estimateY / scale);
 
 			// --- Pass 2: Fine search on full-resolution image around the estimate ---
 			const searchRadius = 30; // Search +/- 30px around the estimate. Should be larger than the error.
-
 			const fineTargetX = Math.max(minShift, scaledEstimateX - searchRadius);
-			const periodX = findBestShift(fullGray, fullW, fullH, "horizontal", fineTargetX, minShift, scaledEstimateX + searchRadius);
+			const periodX = findBestShift(fullFeat, fullW, fullH, "horizontal", fineTargetX, minShift, scaledEstimateX + searchRadius);
 
 			const fineTargetY = Math.max(minShift, scaledEstimateY - searchRadius);
-			const periodY = findBestShift(fullGray, fullW, fullH, "vertical", fineTargetY, minShift, scaledEstimateY + searchRadius);
+			const periodY = findBestShift(fullFeat, fullW, fullH, "vertical", fineTargetY, minShift, scaledEstimateY + searchRadius);
 
 			return { periodX, periodY };
 		}
