@@ -664,6 +664,12 @@
 			}
 		});
 
+		previewCanvas.addEventListener("dblclick", e => {
+			// Reset zoom and position on double-click
+			transform = { x: 0, y: 0, zoom: 1 };
+			drawPreview();
+		});
+
 		// ---- Preview controls (Touch)
 		previewCanvas.addEventListener("touchstart", e => {
 			e.preventDefault();
