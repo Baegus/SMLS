@@ -439,7 +439,170 @@
 		</div>
 	</div>
 
+	<!-- Hidden WebGL Canvas for generation -->
+	<canvas id="webgl-canvas" style="display: none;"></canvas>
+
 	<script src="https://cdn.jsdelivr.net/npm/cropperjs@1.6.2/dist/cropper.min.js"></script>
+
+	<!-- SHADERS -->
+	<script id="vs" type="x-shader/x-vertex">
+		attribute vec2 a_position;
+		attribute vec2 a_texCoord;
+		varying vec2 v_texCoord;
+		void main() {
+			gl_Position = vec4(a_position, 0.0, 1.0);
+			v_texCoord = a_texCoord;
+		}
+	</script>
+
+	<script id="fs" type="x-shader/x-fragment">
+		precision highp float;
+		varying vec2 v_texCoord;
+
+		uniform sampler2D u_image;
+		uniform vec2 u_imgRes;
+		uniform vec4 u_crop;       // x, y, width, height
+		uniform float u_blendAmt;
+		uniform int u_mode;        // 0=linear, 1=wavy, 2=perlin
+		uniform vec3 u_params;     // x=waviness/amp, y=scale, z=octaves
+		uniform vec2 u_offsets;    // x=horizontal offset, y=vertical offset
+		uniform bool u_showTrans;
+
+		// --- NOISE FUNCTIONS ---
+		vec3 mod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+		vec2 mod289(vec2 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+		vec3 permute(vec3 x) { return mod289(((x*34.0)+1.0)*x); }
+		float snoise(vec2 v) {
+			const vec4 C = vec4(0.211324865405187, 0.366025403784439, -0.577350269189626, 0.024390243902439);
+			vec2 i  = floor(v + dot(v, C.yy) );
+			vec2 x0 = v -   i + dot(i, C.xx);
+			vec2 i1;
+			i1 = (x0.x > x0.y) ? vec2(1.0, 0.0) : vec2(0.0, 1.0);
+			vec4 x12 = x0.xyxy + C.xxzz;
+			x12.xy -= i1;
+			i = mod289(i);
+			vec3 p = permute( permute( i.y + vec3(0.0, i1.y, 1.0 )) + i.x + vec3(0.0, i1.x, 1.0 ));
+			vec3 m = max(0.5 - vec3(dot(x0,x0), dot(x12.xy,x12.xy), dot(x12.zw,x12.zw)), 0.0);
+			m = m*m ;
+			m = m*m ;
+			vec3 x = 2.0 * fract(p * C.www) - 1.0;
+			vec3 h = abs(x) - 0.5;
+			vec3 ox = floor(x + 0.5);
+			vec3 a0 = x - ox;
+			m *= 1.79284291400159 - 0.85373472095314 * ( a0*a0 + h*h );
+			vec3 g;
+			g.x  = a0.x  * x0.x  + h.x  * x0.y;
+			g.yz = a0.yz * x12.xz + h.yz * x12.yw;
+			return 130.0 * dot(m, g);
+		}
+
+		float fbm(vec2 st, int octaves, float scale) {
+			float v = 0.0;
+			float a = 0.5;
+			vec2 shift = vec2(100.0);
+			mat2 rot = mat2(cos(0.5), sin(0.5), -sin(0.5), cos(0.50));
+			vec2 pos = st * scale;
+			for (int i = 0; i < 8; i++) {
+				if(i >= octaves) break;
+				v += a * snoise(pos);
+				pos = rot * pos * 2.0 + shift;
+				a *= 0.5;
+			}
+			return v;
+		}
+
+		float getMask(float dist, float blendW, float edgeCoord, float orthoSize) {
+			if (blendW <= 0.001) return 0.0;
+			float t = dist / blendW; 
+			float offset = 0.0;
+			float thickness = orthoSize;
+
+			if (u_mode == 1) { // Wavy
+				float amp = min(0.45, (u_params.x / 100.0) * 0.5);
+				float wavesBase = max(1.0, floor((u_params.x / 100.0) * 8.0));
+				float normC = edgeCoord / max(1.0, thickness);
+				float waveVal = 0.7 * sin(6.28 * wavesBase * normC) + 0.3 * sin(6.28 * wavesBase * 2.0 * normC);
+				offset = amp * waveVal;
+			} else if (u_mode == 2) { // Perlin
+				float scale = (u_params.y / 1000.0);
+				int oct = int(u_params.z);
+				float amp = 0.45; 
+				float nVal = fbm(vec2(dist, edgeCoord), oct, scale); 
+				offset = amp * nVal;
+			}
+			
+			float a = 1.0 - (t - offset);
+			a = clamp(a, 0.0, 1.0);
+			a = a * a * (3.0 - 2.0 * a);
+			return a;
+		}
+
+		void main() {
+			vec2 pixelPos = v_texCoord * u_crop.zw;
+			vec2 srcOrigin = u_crop.xy;
+			
+			vec4 finalColor = texture2D(u_image, (srcOrigin + pixelPos) / u_imgRes);
+			
+			float blendX = floor(u_blendAmt * u_crop.z);
+			float blendY = floor(u_blendAmt * u_crop.w);
+			
+			float alphaH = 0.0;
+			float alphaV = 0.0;
+			
+			// --- Horizontal Blend ---
+			if (abs(u_offsets.x) > 0.0) {
+				bool isLeftEdge = (u_offsets.x > 0.0);
+				float dist = isLeftEdge ? pixelPos.x : (u_crop.z - pixelPos.x);
+				
+				if (dist < blendX) {
+					alphaH = getMask(dist, blendX, pixelPos.y, u_crop.w);
+					vec2 samplePos = srcOrigin + pixelPos;
+					samplePos.x += u_offsets.x;
+					vec4 blendCol = texture2D(u_image, samplePos / u_imgRes);
+					finalColor = mix(finalColor, blendCol, alphaH);
+				}
+			}
+
+			// --- Vertical Blend ---
+			if (abs(u_offsets.y) > 0.0) {
+				bool isTopEdge = (u_offsets.y > 0.0);
+				float dist = isTopEdge ? pixelPos.y : (u_crop.w - pixelPos.y);
+				
+				if (dist < blendY) {
+					alphaV = getMask(dist, blendY, pixelPos.x, u_crop.z);
+					
+					vec2 samplePosBase = srcOrigin + pixelPos;
+					samplePosBase.y += u_offsets.y;
+					
+					vec4 blendCol = texture2D(u_image, samplePosBase / u_imgRes);
+					
+					// Corner logic for vertical blend source
+					if (abs(u_offsets.x) > 0.0) {
+						bool isLeftEdge = (u_offsets.x > 0.0);
+						float distX = isLeftEdge ? pixelPos.x : (u_crop.z - pixelPos.x);
+						if (distX < blendX) {
+							float aH2 = getMask(distX, blendX, pixelPos.y + u_offsets.y, u_crop.w);
+							vec2 samplePosCross = samplePosBase;
+							samplePosCross.x += u_offsets.x;
+							vec4 crossCol = texture2D(u_image, samplePosCross / u_imgRes);
+							blendCol = mix(blendCol, crossCol, aH2);
+						}
+					}
+					
+					finalColor = mix(finalColor, blendCol, alphaV);
+				}
+			}
+
+			if (u_showTrans) {
+				float maxA = max(alphaH, alphaV);
+				if (maxA <= 0.0) discard;
+				finalColor = vec4(finalColor.rgb, maxA); 
+			}
+
+			gl_FragColor = finalColor;
+		}
+	</script>
+
 	<script>
 		function debounce(func, getWait) {
 			let timeout;
@@ -453,42 +616,6 @@
 				timeout = setTimeout(later, wait);
 			};
 		}
-		// --- PERLIN NOISE GENERATOR ---
-		// Based on implementation by Ken Perlin
-		class PerlinNoise {
-			constructor() {
-				this.p = new Uint8Array(512);
-				const permutation = [151, 160, 137, 91, 90, 15, 131, 13, 201, 95, 96, 53, 194, 233, 7, 225, 140, 36, 103, 30, 69, 142, 8, 99, 37, 240, 21, 10, 23, 190, 6, 148, 247, 120, 234, 75, 0, 26, 197, 62, 94, 252, 219, 203, 117, 35, 11, 32, 57, 177, 33, 88, 237, 149, 56, 87, 174, 20, 125, 136, 171, 168, 68, 175, 74, 165, 71, 134, 139, 48, 27, 166, 77, 146, 158, 231, 83, 111, 229, 122, 60, 211, 133, 230, 220, 105, 92, 41, 55, 46, 245, 40, 244, 102, 143, 54, 65, 25, 63, 161, 1, 216, 80, 73, 209, 76, 132, 187, 208, 89, 18, 169, 200, 196, 135, 130, 116, 188, 159, 86, 164, 100, 109, 198, 173, 186, 3, 64, 52, 217, 226, 250, 124, 123, 5, 202, 38, 147, 118, 126, 255, 82, 85, 212, 207, 206, 59, 227, 47, 16, 58, 17, 182, 189, 28, 42, 223, 183, 170, 213, 119, 248, 152, 2, 44, 154, 163, 70, 221, 153, 101, 155, 167, 43, 172, 9, 129, 22, 39, 253, 19, 98, 108, 110, 79, 113, 224, 232, 178, 185, 112, 104, 218, 246, 97, 228, 254, 138, 1, 107, 205, 4, 195, 121, 115, 210, 51, 14, 162, 34, 215, 150, 156, 128, 141, 180, 181, 114, 193, 214, 199, 192, 106, 72, 127, 176, 238, 239, 184, 249, 67, 12, 145, 24, 236, 222, 191, 144, 157, 66, 235, 49, 61, 179, 81, 93, 243, 204, 241, 78, 242, 12, 31, 50];
-				for (let i = 0; i < 256; i++) this.p[i] = this.p[i + 256] = permutation[i];
-			}
-			noise(x, y, z = 0) {
-				let X = Math.floor(x) & 255,
-					Y = Math.floor(y) & 255,
-					Z = Math.floor(z) & 255;
-				x -= Math.floor(x); y -= Math.floor(y); z -= Math.floor(z);
-				let u = this.fade(x), v = this.fade(y), w = this.fade(z);
-				let A = this.p[X] + Y,
-					AA = this.p[A] + Z,
-					AB = this.p[A + 1] + Z,
-					B = this.p[X + 1] + Y,
-					BA = this.p[B] + Z,
-					BB = this.p[B + 1] + Z;
-				return this.lerp(w, this.lerp(v, this.lerp(u, this.grad(this.p[AA], x, y, z), this.grad(this.p[BA], x - 1, y, z)),
-					this.lerp(u, this.grad(this.p[AB], x, y - 1, z), this.grad(this.p[BB], x - 1, y - 1, z))),
-					this.lerp(v, this.lerp(u, this.grad(this.p[AA + 1], x, y, z - 1),
-						this.grad(this.p[BA + 1], x - 1, y, z - 1)),
-						this.lerp(u, this.grad(this.p[AB + 1], x, y - 1, z - 1), this.grad(this.p[BB + 1], x - 1, y - 1, z - 1))));
-			}
-			fade(t) { return t * t * t * (t * (t * 6 - 15) + 10); }
-			lerp(t, a, b) { return a + t * (b - a); }
-			grad(hash, x, y, z) {
-				let h = hash & 15;
-				let u = h < 8 ? x : y, v = h < 4 ? y : h === 12 || h === 14 ? x : z;
-				return ((h & 1) === 0 ? u : -u) + ((h & 2) === 0 ? v : -v);
-			}
-		}
-		const perlin = new PerlinNoise();
-
 
 		// DOM Elements
 		const dropZone = document.getElementById("drop-zone");
@@ -496,10 +623,21 @@
 		const imageToCrop = document.getElementById("image-to-crop");
 		const downloadBtn = document.getElementById("download-btn");
 		const resetBtn = document.getElementById("reset-btn");
+
+		// Canvas Elements
 		const previewCanvas = document.getElementById("preview-canvas");
 		const previewCtx = previewCanvas.getContext("2d");
-		const showTransitionsCheckbox = document.getElementById("show-transitions");
+		const webglCanvas = document.getElementById("webgl-canvas");
+		// Create WebGL context. preserveDrawingBuffer is needed for toBlob/saving, 
+		// but requires manual clearing (added in render function).
+		// Disable premultipliedAlpha to ensure semi-transparent pixels render correctly
+		const gl = webglCanvas.getContext("webgl", {
+			preserveDrawingBuffer: true,
+			alpha: true,
+			premultipliedAlpha: false
+		});
 
+		const showTransitionsCheckbox = document.getElementById("show-transitions");
 		const algoContainer = document.getElementById("algo-container");
 		const blendModeSelect = document.getElementById("blend-mode");
 		const blendSliderContainer = document.getElementById("blend-slider-container");
@@ -518,15 +656,76 @@
 		const cropWidthInput = document.getElementById("crop-width-input");
 		const cropHeightInput = document.getElementById("crop-height-input");
 
-
 		// ---- State
-		let cropper, finalTileCanvas, transitionOnlyCanvas, sourceImage;
+		let cropper, sourceImage;
 		let transform = { x: 0, y: 0, zoom: 1 };
 		let isPanning = false;
 		let lastMousePos = { x: 0, y: 0 };
 		let initialPinchDistance = null;
 		let uploadedFileName = "image";
 		let currentObjectUrl = null;
+		let glProgram, glTexture;
+		let buffer;
+
+		// --- Setup WebGL ---
+		function initWebGL() {
+			if (!gl) { alert("WebGL not supported"); return; }
+
+			const vsSource = document.getElementById("vs").text;
+			const fsSource = document.getElementById("fs").text;
+
+			const vs = createShader(gl, gl.VERTEX_SHADER, vsSource);
+			const fs = createShader(gl, gl.FRAGMENT_SHADER, fsSource);
+			glProgram = createProgram(gl, vs, fs);
+
+			// Buffers (Full Quad)
+			const positions = new Float32Array([
+				-1, -1, 0, 0,
+				1, -1, 1, 0,
+				-1, 1, 0, 1,
+				1, 1, 1, 1,
+			]);
+			buffer = gl.createBuffer();
+			gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+			gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
+		}
+
+		function createShader(gl, type, source) {
+			const shader = gl.createShader(type);
+			gl.shaderSource(shader, source);
+			gl.compileShader(shader);
+			if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+				console.error(gl.getShaderInfoLog(shader));
+				gl.deleteShader(shader);
+				return null;
+			}
+			return shader;
+		}
+
+		function createProgram(gl, vs, fs) {
+			const program = gl.createProgram();
+			gl.attachShader(program, vs);
+			gl.attachShader(program, fs);
+			gl.linkProgram(program);
+			if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+				console.error(gl.getProgramInfoLog(program));
+				return null;
+			}
+			return program;
+		}
+
+		function uploadTexture(image) {
+			if (glTexture) gl.deleteTexture(glTexture);
+			glTexture = gl.createTexture();
+			gl.bindTexture(gl.TEXTURE_2D, glTexture);
+			gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+			gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+			gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+			gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+			gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
+		}
+
+		initWebGL();
 
 		// --- Event Listeners ---
 		dropZone.addEventListener("click", () => imageInput.click());
@@ -539,115 +738,83 @@
 		});
 		dropZone.addEventListener("drop", e => {
 			e.preventDefault();
-			e.stopPropagation(); // Prevent window handler from firing too
+			e.stopPropagation();
 			dropZone.style.borderColor = "#dfe1e6";
 			if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
 		});
 		imageInput.addEventListener("change", e => {
 			if (e.target.files.length) handleFile(e.target.files[0]);
 		});
-
-		// Make the entire page a drop zone
-		window.addEventListener("dragover", e => {
-			e.preventDefault();
-		});
-
+		window.addEventListener("dragover", e => e.preventDefault());
 		window.addEventListener("drop", e => {
 			e.preventDefault();
-			if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-				handleFile(e.dataTransfer.files[0]);
-			}
+			if (e.dataTransfer.files && e.dataTransfer.files.length > 0) handleFile(e.dataTransfer.files[0]);
 		});
 
 		const handleSizeInputChange = () => {
 			if (!cropper || !sourceImage) return;
 			const newWidth = parseInt(cropWidthInput.value, 10);
 			const newHeight = parseInt(cropHeightInput.value, 10);
-
-			if (isNaN(newWidth) || isNaN(newHeight) || newWidth <= 0 || newHeight <= 0) {
-				return; // Don't set invalid data
-			}
-
-			// Clamp the width and height to the source image dimensions
+			if (isNaN(newWidth) || isNaN(newHeight) || newWidth <= 0 || newHeight <= 0) return;
 			const clampedWidth = Math.min(newWidth, sourceImage.naturalWidth);
 			const clampedHeight = Math.min(newHeight, sourceImage.naturalHeight);
 			cropWidthInput.value = clampedWidth;
 			cropHeightInput.value = clampedHeight;
-
-			cropper.setData({
-				width: clampedWidth,
-				height: clampedHeight
-			});
+			cropper.setData({ width: clampedWidth, height: clampedHeight });
 		};
 		const debouncedSizeChange = debounce(handleSizeInputChange, 300);
 		cropWidthInput.addEventListener("input", debouncedSizeChange);
 		cropHeightInput.addEventListener("input", debouncedSizeChange);
 
-		let megapixels = 0;
-		const debouncedGenerateTexture = debounce(generateSeamlessTexture, () => {
-			// Dynamic debounce delay based on image size
-			if (!sourceImage) return 200; // default fallback
-			if (megapixels < 1) return 10;
-			if (megapixels < 4) return 100;
-			return 300;
-		});
+		const updateTexture = () => requestAnimationFrame(generateSeamlessTexture);
 
-		const handleParamChange = () => debouncedGenerateTexture();
 		blendSlider.addEventListener("input", () => {
 			blendValueSpan.textContent = blendSlider.value;
-			handleParamChange();
+			updateTexture();
 		});
 		wavinessSlider.addEventListener("input", () => {
 			wavinessValueSpan.textContent = wavinessSlider.value;
-			handleParamChange();
+			updateTexture();
 		});
 		perlinScaleSlider.addEventListener("input", () => {
 			perlinScaleValueSpan.textContent = perlinScaleSlider.value;
-			handleParamChange();
+			updateTexture();
 		});
 		perlinOctavesSlider.addEventListener("input", () => {
 			perlinOctavesValueSpan.textContent = perlinOctavesSlider.value;
-			handleParamChange();
+			updateTexture();
 		});
-
 
 		blendModeSelect.addEventListener("change", () => {
 			const mode = blendModeSelect.value;
 			wavinessContainer.style.display = mode === "wavy" ? "block" : "none";
 			perlinScaleContainer.style.display = mode === "perlin" ? "block" : "none";
 			perlinOctavesContainer.style.display = mode === "perlin" ? "block" : "none";
-			generateSeamlessTexture();
+			updateTexture();
 		});
 
 		downloadBtn.addEventListener("click", () => {
-			if (!finalTileCanvas) return;
-			const fileName = `SMLS_${finalTileCanvas.width}x${finalTileCanvas.height}_${uploadedFileName}.png`;
-			finalTileCanvas.toBlob(function (blob) {
+			webglCanvas.toBlob(function (blob) {
+				const fileName = `SMLS_${webglCanvas.width}x${webglCanvas.height}_${uploadedFileName}.png`;
 				saveAs(blob, fileName);
 			}, "image/png");
 		});
 
 		resetBtn.addEventListener("click", () => {
-			if (confirm("Are you sure you want to discard the current image?")) {
-				resetTool();
-			}
+			if (confirm("Are you sure you want to discard the current image?")) resetTool();
 		});
 
-
-		// ---- Preview controls (Mouse)
+		// Preview Interactions
 		previewCanvas.addEventListener("wheel", handleZoom, { passive: false });
 		previewCanvas.addEventListener("mousedown", e => {
 			isPanning = true;
 			lastMousePos = { x: e.clientX, y: e.clientY };
 			document.body.style.cursor = "grabbing";
 		});
-		
-		// Attach mousemove and mouseup to document so panning works even when leaving the canvas
 		document.addEventListener("mousemove", e => {
 			if (!isPanning) return;
-			const dx = e.clientX - lastMousePos.x, dy = e.clientY - lastMousePos.y;
-			transform.x += dx;
-			transform.y += dy;
+			transform.x += e.clientX - lastMousePos.x;
+			transform.y += e.clientY - lastMousePos.y;
 			lastMousePos = { x: e.clientX, y: e.clientY };
 			drawPreview();
 		});
@@ -655,95 +822,68 @@
 			isPanning = false;
 			document.body.style.cursor = "";
 		});
-		
-		// Reset panning state when mouse enters canvas if button is not pressed
 		previewCanvas.addEventListener("mouseenter", e => {
-			if ((e.buttons & 1) === 0) {
-				isPanning = false;
-				document.body.style.cursor = "";
-			}
+			if ((e.buttons & 1) === 0) { isPanning = false; document.body.style.cursor = ""; }
 		});
-
-		previewCanvas.addEventListener("dblclick", e => {
-			// Reset zoom and position on double-click
+		previewCanvas.addEventListener("dblclick", () => {
 			transform = { x: 0, y: 0, zoom: 1 };
 			drawPreview();
 		});
-
-		// ---- Preview controls (Touch)
+		// Touch
 		previewCanvas.addEventListener("touchstart", e => {
 			e.preventDefault();
 			if (e.touches.length === 1) {
 				isPanning = true;
 				lastMousePos = { x: e.touches[0].clientX, y: e.touches[0].clientY };
 			} else if (e.touches.length === 2) {
-				isPanning = false; // Stop panning for pinch
+				isPanning = false;
 				const dx = e.touches[0].clientX - e.touches[1].clientX;
 				const dy = e.touches[0].clientY - e.touches[1].clientY;
 				initialPinchDistance = Math.sqrt(dx * dx + dy * dy);
 			}
 		}, { passive: false });
-
 		previewCanvas.addEventListener("touchmove", e => {
 			e.preventDefault();
 			if (e.touches.length === 1 && isPanning) {
-				// Pan (1 finger)
 				const touch = e.touches[0];
-				const dx = touch.clientX - lastMousePos.x;
-				const dy = touch.clientY - lastMousePos.y;
-				transform.x += dx;
-				transform.y += dy;
+				transform.x += touch.clientX - lastMousePos.x;
+				transform.y += touch.clientY - lastMousePos.y;
 				lastMousePos = { x: touch.clientX, y: touch.clientY };
 				drawPreview();
 			} else if (e.touches.length === 2 && initialPinchDistance) {
-				// Pinch to Zoom (2 fingers)
 				const dx = e.touches[0].clientX - e.touches[1].clientX;
 				const dy = e.touches[0].clientY - e.touches[1].clientY;
-				const currentDistance = Math.sqrt(dx * dx + dy * dy);
-				const scale = currentDistance / initialPinchDistance;
-
+				const dist = Math.sqrt(dx * dx + dy * dy);
+				const scale = dist / initialPinchDistance;
 				const rect = previewCanvas.getBoundingClientRect();
-				const midX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
-				const midY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
-				const mX = midX - rect.left;
-				const mY = midY - rect.top;
-
+				const mX = (e.touches[0].clientX + e.touches[1].clientX) / 2 - rect.left;
+				const mY = (e.touches[0].clientY + e.touches[1].clientY) / 2 - rect.top;
 				const oZ = transform.zoom;
-				transform.zoom *= scale;
-				transform.zoom = Math.max(0.1, Math.min(10, transform.zoom));
-
+				transform.zoom = Math.max(0.1, Math.min(10, transform.zoom * scale));
 				transform.x = mX - (mX - transform.x) * (transform.zoom / oZ);
 				transform.y = mY - (mY - transform.y) * (transform.zoom / oZ);
-
-				initialPinchDistance = currentDistance;
+				initialPinchDistance = dist;
 				drawPreview();
 			}
 		}, { passive: false });
-
 		previewCanvas.addEventListener("touchend", e => {
-			if (e.touches.length < 2) {
-				initialPinchDistance = null;
-			}
-			if (e.touches.length < 1) {
-				isPanning = false;
-			}
-			// If a pinch ends and one finger remains, start panning from that finger's position
+			if (e.touches.length < 2) initialPinchDistance = null;
+			if (e.touches.length < 1) isPanning = false;
 			if (e.touches.length === 1) {
 				isPanning = true;
 				lastMousePos = { x: e.touches[0].clientX, y: e.touches[0].clientY };
 			}
 		});
 
-
 		window.addEventListener("resize", drawPreview);
-		showTransitionsCheckbox.addEventListener("change", drawPreview);
-
+		showTransitionsCheckbox.addEventListener("change", generateSeamlessTexture);
 
 		function handleZoom(e) {
 			e.preventDefault();
 			const scale = 1.1;
 			const rect = previewCanvas.getBoundingClientRect();
-			const mX = e.clientX - rect.left, mY = e.clientY - rect.top;
+			const mX = e.clientX - rect.left;
+			const mY = e.clientY - rect.top;
 			const oZ = transform.zoom;
 			transform.zoom *= (e.deltaY < 0 ? scale : 1 / scale);
 			transform.zoom = Math.max(0.1, Math.min(10, transform.zoom));
@@ -754,18 +894,9 @@
 
 		function handleFile(file) {
 			if (!file.type.startsWith("image/")) return;
-
-			// Revoke the old object URL to free up memory
-			if (currentObjectUrl) {
-				URL.revokeObjectURL(currentObjectUrl);
-			}
-
-			// Store filename for download
+			if (currentObjectUrl) URL.revokeObjectURL(currentObjectUrl);
 			uploadedFileName = file.name.replace(/\.[^/.]+$/, "");
-
-			// Create a new object URL for the uploaded file
 			currentObjectUrl = URL.createObjectURL(file);
-
 			imageToCrop.classList.remove("loaded");
 			sourceImage = new Image();
 			sourceImage.onload = () => {
@@ -774,13 +905,14 @@
 				cropSizeContainer.style.display = "flex";
 				algoContainer.style.display = "block";
 				blendSliderContainer.style.display = "block";
-				// Show correct sliders for default mode
 				const mode = blendModeSelect.value;
 				wavinessContainer.style.display = mode === "wavy" ? "block" : "none";
 				perlinScaleContainer.style.display = mode === "perlin" ? "block" : "none";
 				perlinOctavesContainer.style.display = mode === "perlin" ? "block" : "none";
 				downloadBtn.disabled = false;
 				resetBtn.style.display = "block";
+
+				uploadTexture(sourceImage);
 
 				if (cropper) cropper.destroy();
 				cropper = new Cropper(imageToCrop, {
@@ -789,79 +921,167 @@
 					zoomable: false,
 					crop: () => {
 						const data = cropper.getData({ rounded: true });
-						// Update inputs ONLY if they are not the active element to prevent loops
 						if (document.activeElement !== cropWidthInput && document.activeElement !== cropHeightInput) {
 							cropWidthInput.value = data.width;
 							cropHeightInput.value = data.height;
 						}
-						debouncedGenerateTexture();
+						requestAnimationFrame(generateSeamlessTexture);
 					},
 					ready: function () {
 						this.cropper.setData({
-							x: 0,
-							y: 0,
+							x: 0, y: 0,
 							width: sourceImage.naturalWidth * 0.9,
 							height: sourceImage.naturalHeight * 0.9,
 						});
 					}
 				});
 				imageToCrop.classList.add("loaded");
-				megapixels = (sourceImage.naturalWidth * sourceImage.naturalHeight) / 1_000_000;
 			};
 			sourceImage.src = currentObjectUrl;
 		}
 
 		function resetTool() {
-			// Destroy cropper
-			if (cropper) {
-				cropper.destroy();
-				cropper = null;
-			}
-
-			// Reset DOM visibility
+			if (cropper) { cropper.destroy(); cropper = null; }
 			imageToCrop.src = "";
 			imageToCrop.classList.remove("loaded");
 			dropZone.style.display = "block";
-
-			// Hide all sliders and algo selector
 			cropSizeContainer.style.display = "none";
 			algoContainer.style.display = "none";
 			blendSliderContainer.style.display = "none";
 			wavinessContainer.style.display = "none";
 			perlinScaleContainer.style.display = "none";
 			perlinOctavesContainer.style.display = "none";
-
-			// Reset button states
 			downloadBtn.disabled = true;
 			resetBtn.style.display = "none";
-
-			// Clear preview
-			if (previewCanvas.width > 0 && previewCanvas.height > 0) {
-				previewCtx.clearRect(0, 0, previewCanvas.width, previewCanvas.height);
-			}
-
-			if (currentObjectUrl) {
-				URL.revokeObjectURL(currentObjectUrl);
-			}
-
-			// Reset state variables
-			finalTileCanvas = null;
-			transitionOnlyCanvas = null;
+			if (previewCanvas.width > 0) previewCtx.clearRect(0, 0, previewCanvas.width, previewCanvas.height);
+			if (currentObjectUrl) URL.revokeObjectURL(currentObjectUrl);
 			sourceImage = null;
 			currentObjectUrl = null;
 			uploadedFileName = "image";
 			transform = { x: 0, y: 0, zoom: 1 };
-
-			// Allow re-uploading the same file
 			imageInput.value = null;
 		}
 
-		// --- Automatic Pattern Detection ---
+		// --- MAIN RENDER FUNCTION ---
+		let megapixels = 0;
+		function generateSeamlessTexture() {
+			if (!cropper || !sourceImage || !gl) return;
 
+			const crop = cropper.getData({ rounded: true });
+
+			webglCanvas.width = crop.width;
+			webglCanvas.height = crop.height;
+			gl.viewport(0, 0, crop.width, crop.height);
+			gl.clearColor(0, 0, 0, 0);
+			gl.clear(gl.COLOR_BUFFER_BIT);
+
+			gl.useProgram(glProgram);
+
+			const posLoc = gl.getAttribLocation(glProgram, "a_position");
+			const texLoc = gl.getAttribLocation(glProgram, "a_texCoord");
+
+			gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+			gl.enableVertexAttribArray(posLoc);
+			gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 16, 0);
+			gl.enableVertexAttribArray(texLoc);
+			gl.vertexAttribPointer(texLoc, 2, gl.FLOAT, false, 16, 8);
+
+			const sx = crop.x;
+			const sy = crop.y;
+			const sw = crop.width;
+			const sh = crop.height;
+			const imgW = sourceImage.naturalWidth;
+			const imgH = sourceImage.naturalHeight;
+
+			megapixels = (imgW * imgH) / 1e6;
+
+			const rightExcess = imgW - (sx + sw);
+			const leftExcess = sx;
+			const bottomExcess = imgH - (sy + sh);
+			const topExcess = sy;
+
+			let offX = 0;
+			let offY = 0;
+
+			if (rightExcess >= leftExcess && rightExcess > 0) {
+				offX = sw;
+			} else if (leftExcess > 0) {
+				offX = -sw;
+			}
+
+			if (bottomExcess >= topExcess && bottomExcess > 0) {
+				offY = sh;
+			} else if (topExcess > 0) {
+				offY = -sh;
+			}
+
+			const uImgRes = gl.getUniformLocation(glProgram, "u_imgRes");
+			const uCrop = gl.getUniformLocation(glProgram, "u_crop");
+			const uBlendAmt = gl.getUniformLocation(glProgram, "u_blendAmt");
+			const uMode = gl.getUniformLocation(glProgram, "u_mode");
+			const uParams = gl.getUniformLocation(glProgram, "u_params");
+			const uOffsets = gl.getUniformLocation(glProgram, "u_offsets");
+			const uShowTrans = gl.getUniformLocation(glProgram, "u_showTrans");
+
+			gl.uniform2f(uImgRes, imgW, imgH);
+			gl.uniform4f(uCrop, sx, sy, sw, sh);
+			gl.uniform1f(uBlendAmt, blendSlider.value / 100);
+
+			let modeIdx = 0;
+			if (blendModeSelect.value === "wavy") modeIdx = 1;
+			if (blendModeSelect.value === "perlin") modeIdx = 2;
+			gl.uniform1i(uMode, modeIdx);
+
+			gl.uniform3f(uParams,
+				parseFloat(wavinessSlider.value),
+				parseFloat(perlinScaleSlider.value),
+				parseFloat(perlinOctavesSlider.value)
+			);
+
+			gl.uniform2f(uOffsets, offX, offY);
+			gl.uniform1i(uShowTrans, showTransitionsCheckbox.checked ? 1 : 0);
+
+			gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+			drawPreview();
+		}
+
+		function drawPreview() {
+			const rect = previewCanvas.getBoundingClientRect();
+			if (rect.width !== previewCanvas.width || rect.height !== previewCanvas.height) {
+				previewCanvas.width = rect.width;
+				previewCanvas.height = rect.height;
+			}
+
+			previewCtx.clearRect(0, 0, previewCanvas.width, previewCanvas.height);
+			if (webglCanvas.width === 0) return;
+
+			// Check if we need to draw a background for transparency check
+			if (showTransitionsCheckbox.checked) {
+				// Optional: Draw a checkered background for better visibility of the mask
+			}
+
+			const pattern = previewCtx.createPattern(webglCanvas, "repeat");
+			previewCtx.save();
+			previewCtx.translate(transform.x, transform.y);
+			previewCtx.scale(transform.zoom, transform.zoom);
+			previewCtx.fillStyle = pattern;
+
+			const pW = previewCanvas.width;
+			const pH = previewCanvas.height;
+			const startX = -transform.x / transform.zoom;
+			const startY = -transform.y / transform.zoom;
+			const w = pW / transform.zoom;
+			const h = pH / transform.zoom;
+
+			previewCtx.fillRect(startX, startY, w, h);
+			previewCtx.restore();
+		}
+
+		// --- AUTO-FIND LOGIC (CPU) ---
 		const findBtn = document.getElementById("find-pattern-btn");
-		/**
-		 * Kicks off the two-pass (coarse and fine) pattern detection process.
-		 */
+		findBtn.addEventListener("click", findBestCrop);
+
 		async function findBestCrop() {
 			if (!sourceImage || !cropper) return;
 
@@ -874,14 +1094,10 @@
 			const originalText = findBtn.innerHTML;
 			findBtn.disabled = true;
 			findBtn.innerHTML = "Analyzing...";
+			await new Promise(resolve => setTimeout(resolve, 10));
 
-			await new Promise(resolve => setTimeout(resolve, 10)); // Allow UI to update
-
-			// --- Create Grayscale Data (both low-res and full-res) ---
 			const MAX_DIM = 256;
 			const MIN_CROP_FACTOR = 0.5;
-
-			// Low-res canvas for coarse search
 			const coarseCanvas = document.createElement("canvas");
 			const coarseCtx = coarseCanvas.getContext("2d", { willReadFrequently: true });
 			const scale = Math.min(1, MAX_DIM / sourceImage.naturalWidth, MAX_DIM / sourceImage.naturalHeight);
@@ -892,689 +1108,91 @@
 			coarseCtx.drawImage(sourceImage, 0, 0, coarseW, coarseH);
 			const coarseFeat = getFeatureData(coarseCtx, coarseW, coarseH);
 
-			// Full-res canvas for fine search
 			const fullCanvas = document.createElement("canvas");
 			const fullCtx = fullCanvas.getContext("2d", { willReadFrequently: true });
-			const fullW = sourceImage.naturalWidth;
-			const fullH = sourceImage.naturalHeight;
-			fullCanvas.width = fullW;
-			fullCanvas.height = fullH;
-			fullCtx.drawImage(sourceImage, 0, 0, fullW, fullH);
-			const fullFeat = getFeatureData(fullCtx, fullW, fullH);
-
-			const targetWidth = coarseW * MIN_CROP_FACTOR;
-			const targetHeight = coarseH * MIN_CROP_FACTOR;
+			fullCanvas.width = sourceImage.naturalWidth;
+			fullCanvas.height = sourceImage.naturalHeight;
+			fullCtx.drawImage(sourceImage, 0, 0);
+			const fullFeat = getFeatureData(fullCtx, fullCanvas.width, fullCanvas.height);
 
 			const { periodX, periodY } = findPeriodicity(
-				coarseFeat, coarseW, coarseH, targetWidth, targetHeight,
-				fullFeat, fullW, fullH, scale
+				coarseFeat, coarseW, coarseH, coarseW * MIN_CROP_FACTOR, coarseH * MIN_CROP_FACTOR,
+				fullFeat, fullCanvas.width, fullCanvas.height, scale
 			);
 
 			if (periodX > 10 && periodY > 10) {
-				const { bestX, bestY } = findBestOrigin(fullFeat, fullW, fullH, periodX, periodY);
-
-				const safeX = Math.max(0, Math.min(bestX, fullW - periodX - 1));
-				const safeY = Math.max(0, Math.min(bestY, fullH - periodY - 1));
-
-				const currentData = cropper.getData();
-				cropper.setData({
-					...currentData,
-					x: safeX,
-					y: safeY,
-					width: periodX,
-					height: periodY,
-				});
+				const { bestX, bestY } = findBestOrigin(fullFeat, fullCanvas.width, fullCanvas.height, periodX, periodY);
+				const safeX = Math.max(0, Math.min(bestX, fullCanvas.width - periodX - 1));
+				const safeY = Math.max(0, Math.min(bestY, fullCanvas.height - periodY - 1));
+				cropper.setData({ x: safeX, y: safeY, width: periodX, height: periodY });
 			} else {
-				alert("Could not automatically detect a repeating pattern. Please select the crop area manually.");
+				alert("Could not automatically detect a repeating pattern.");
 			}
-
 			findBtn.disabled = false;
 			findBtn.innerHTML = originalText;
 		}
 
-		/**
-		 * Helper: build a feature map (luma + edges) for more robust matching on organic images.
-		 * Returns a Uint8Array of the same size as the image (one byte per pixel).
-		 */
 		function getFeatureData(ctx, width, height) {
 			const { data } = ctx.getImageData(0, 0, width, height);
 			const gray = new Float32Array(width * height);
-
-			// 1) Luminance (BT.601)
 			for (let i = 0, p = 0; i < data.length; i += 4, p++) {
 				gray[p] = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
 			}
-
-			// 2) Sobel edge magnitude (very lightweight)
-			const mag = new Float32Array(width * height);
-			const idx = (x, y) => y * width + x;
-			for (let y = 1; y < height - 1; y++) {
-				for (let x = 1; x < width - 1; x++) {
-					const gx = -gray[idx(x - 1, y - 1)] - 2 * gray[idx(x - 1, y)] - gray[idx(x - 1, y + 1)]
-						+ gray[idx(x + 1, y - 1)] + 2 * gray[idx(x + 1, y)] + gray[idx(x + 1, y + 1)];
-					const gy = -gray[idx(x - 1, y - 1)] - 2 * gray[idx(x, y - 1)] - gray[idx(x + 1, y - 1)]
-						+ gray[idx(x - 1, y + 1)] + 2 * gray[idx(x, y + 1)] + gray[idx(x + 1, y + 1)];
-					mag[idx(x, y)] = Math.hypot(gx, gy);
-				}
-			}
-
-			// 3) Normalize and blend: feature = 0.7*luma + 0.3*edges
-			let maxL = 1, maxE = 1;
-			for (let i = 0; i < gray.length; i++) { if (gray[i] > maxL) maxL = gray[i]; if (mag[i] > maxE) maxE = mag[i]; }
-			const out = new Uint8Array(width * height);
-			for (let i = 0; i < out.length; i++) {
-				const l = gray[i] / maxL;
-				const e = mag[i] / maxE;
-				out[i] = Math.round(255 * (0.7 * l + 0.3 * e));
-			}
-			return out;
+			return gray;
 		}
 
-		/**
-		 * Search for the best (x,y) origin for a given period by minimizing
-		 * edge mismatches between opposing tile borders (left↔right, top↔bottom).
-		 * Uses a stride to keep it fast on large images.
-		 */
-		function findBestOrigin(feat, width, height, periodX, periodY) {
-			// Ensure we can compare edges with one neighboring tile inside the image
-			const maxX = Math.max(0, width - periodX - 1);
-			const maxY = Math.max(0, height - periodY - 1);
-
-			// Sample stride (denser for small periods, sparser for large)
-			const strideX = Math.max(1, Math.floor(periodX / 6));
-			const strideY = Math.max(1, Math.floor(periodY / 6));
-
-			let bestScore = Number.POSITIVE_INFINITY;
-			let bestX = 0, bestY = 0;
-
-			// Precompute sampling step along edges
-			const edgeSampleY = Math.max(1, Math.floor(periodY / 64));
-			const edgeSampleX = Math.max(1, Math.floor(periodX / 64));
-
-			for (let sy = 0; sy <= maxY; sy += strideY) {
-				for (let sx = 0; sx <= maxX; sx += strideX) {
-					const score = seamScore(feat, width, height, sx, sy, periodX, periodY, edgeSampleX, edgeSampleY);
-					if (score < bestScore) {
-						bestScore = score;
-						bestX = sx; bestY = sy;
-					}
-				}
-			}
-			// Optional local refinement around the best candidate
-			const refineRadiusX = Math.max(1, Math.floor(strideX / 2));
-			const refineRadiusY = Math.max(1, Math.floor(strideY / 2));
-			for (let sy = Math.max(0, bestY - refineRadiusY); sy <= Math.min(maxY, bestY + refineRadiusY); sy++) {
-				for (let sx = Math.max(0, bestX - refineRadiusX); sx <= Math.min(maxX, bestX + refineRadiusX); sx++) {
-					const score = seamScore(feat, width, height, sx, sy, periodX, periodY, edgeSampleX, edgeSampleY);
-					if (score < bestScore) { bestScore = score; bestX = sx; bestY = sy; }
-				}
-			}
-			return { bestX, bestY };
+		function findPeriodicity(coarseFeat, cW, cH, tX, tY, fullFeat, fW, fH, scale) {
+			const estX = findBestShift(coarseFeat, cW, cH, "h", tX, 10);
+			const estY = findBestShift(coarseFeat, cW, cH, "v", tY, 10);
+			const sX = Math.round(estX / scale);
+			const sY = Math.round(estY / scale);
+			const rad = 30;
+			const pX = findBestShift(fullFeat, fW, fH, "h", Math.max(10, sX - rad), 10, sX + rad);
+			const pY = findBestShift(fullFeat, fW, fH, "v", Math.max(10, sY - rad), 10, sY + rad);
+			return { periodX: pX, periodY: pY };
 		}
 
-		/**
-		 * Sum of Absolute Differences between opposing borders:
-		 * compares right edge vs next column (tile neighbor), and
-		 * bottom edge vs next row (tile neighbor). Lower is better.
-		 */
-		function seamScore(feat, width, height, sx, sy, wTile, hTile, stepX, stepY) {
-			let sum = 0;
-			// right edge (x = sx + wTile - 1) vs neighbor (x+1 at sx + wTile)
-			const xR = sx + wTile - 1, xN = sx + wTile;
-			if (xN < width) {
-				for (let y = sy; y < sy + hTile && y < height; y += stepY) {
-					const i1 = y * width + xR;
-					const i2 = y * width + xN;
-					sum += Math.abs(feat[i1] - feat[i2]);
-				}
-			} else {
-				sum += 1e9; // penalize invalid comparisons
-			}
-
-			// bottom edge (y = sy + hTile - 1) vs neighbor (y+1 at sy + hTile)
-			const yB = sy + hTile - 1, yN = sy + hTile;
-			if (yN < height) {
-				for (let x = sx; x < sx + wTile && x < width; x += stepX) {
-					const i1 = yB * width + x;
-					const i2 = yN * width + x;
-					sum += Math.abs(feat[i1] - feat[i2]);
-				}
-			} else {
-				sum += 1e9;
-			}
-			return sum;
-		}
-
-		/**
-		 * Performs a two-pass search for the pattern period.
-		 */
-		function findPeriodicity(coarseFeat, coarseW, coarseH, targetX, targetY, fullFeat, fullW, fullH, scale) {
-			const minShift = 10;
-
-			// Pass 1 (coarse) on feature map
-			const estimateX = findBestShift(coarseFeat, coarseW, coarseH, "horizontal", targetX, minShift);
-			const estimateY = findBestShift(coarseFeat, coarseW, coarseH, "vertical", targetY, minShift);
-
-			const scaledEstimateX = Math.round(estimateX / scale);
-			const scaledEstimateY = Math.round(estimateY / scale);
-
-			// --- Pass 2: Fine search on full-resolution image around the estimate ---
-			const searchRadius = 30; // Search +/- 30px around the estimate. Should be larger than the error.
-			const fineTargetX = Math.max(minShift, scaledEstimateX - searchRadius);
-			const periodX = findBestShift(fullFeat, fullW, fullH, "horizontal", fineTargetX, minShift, scaledEstimateX + searchRadius);
-
-			const fineTargetY = Math.max(minShift, scaledEstimateY - searchRadius);
-			const periodY = findBestShift(fullFeat, fullW, fullH, "vertical", fineTargetY, minShift, scaledEstimateY + searchRadius);
-
-			return { periodX, periodY };
-		}
-
-		/**
-		 * Core logic to calculate Sum of Absolute Differences (SAD) and find the best shift.
-		 */
-		function findBestShift(grayData, width, height, direction, targetSize, minShift, searchEnd = null) {
-			const searchLimit = searchEnd || Math.floor((direction === "horizontal" ? width : height) * 0.95);
-
-			const sadScores = [];
-			for (let shift = minShift; shift < searchLimit; shift++) {
-				let sumDiff = 0;
-				if (direction === "horizontal") {
-					for (let y = 0; y < height; y += 4) { // Sample rows for speed
-						for (let x = 0; x < width - shift; x++) {
-							const idx1 = y * width + x;
-							const idx2 = idx1 + shift;
-							sumDiff += Math.abs(grayData[idx1] - grayData[idx2]);
-						}
-					}
-				} else { // vertical
-					for (let x = 0; x < width; x += 4) { // Sample columns for speed
-						for (let y = 0; y < height - shift; y++) {
-							const idx1 = y * width + x;
-							const idx2 = idx1 + (shift * width);
-							sumDiff += Math.abs(grayData[idx1] - grayData[idx2]);
-						}
-					}
-				}
-				sadScores.push({ shift, score: sumDiff });
-			}
-
-			if (sadScores.length === 0) return 0;
-
-			// If it's a fine search (searchEnd is defined), just find the absolute best score.
-			if (searchEnd !== null) {
-				return sadScores.reduce((min, p) => p.score < min.score ? p : min, sadScores[0]).shift;
-			}
-
-			// Otherwise, it's a coarse search. Find local minima and prefer larger sizes.
-			const localMinima = [];
-			for (let i = 1; i < sadScores.length - 1; i++) {
-				if (sadScores[i].score < sadScores[i - 1].score && sadScores[i].score < sadScores[i + 1].score) {
-					localMinima.push(sadScores[i].shift);
-				}
-			}
-
-			if (localMinima.length > 0) {
-				const candidates = localMinima.filter(p => p >= targetSize);
-				if (candidates.length > 0) {
-					return candidates[0]; // Smallest period that meets the size requirement
-				}
-				return localMinima[localMinima.length - 1]; // Fallback to largest found period
-			}
-
-			// Absolute fallback: global minimum if no local ones were found
-			return sadScores.reduce((min, p) => p.score < min.score ? p : min, sadScores[0]).shift;
-		}
-
-		findBtn.addEventListener("click", findBestCrop);
-
-		// ---- Tile generation
-		function generateSeamlessTexture() {
-			if (!cropper || !sourceImage) return;
-
-			// Use Cropper's natural-size coordinates directly.
-			const cropData = cropper.getData({ rounded: true });
-
-			let sx = Math.max(0, Math.round(cropData.x));
-			let sy = Math.max(0, Math.round(cropData.y));
-			let sWidth = Math.max(1, Math.round(cropData.width));
-			let sHeight = Math.max(1, Math.round(cropData.height));
-
-			// Clamp to image bounds to avoid sampling outside the source.
-			sWidth = Math.min(sWidth, sourceImage.naturalWidth - sx);
-			sHeight = Math.min(sHeight, sourceImage.naturalHeight - sy);
-
-			finalTileCanvas = document.createElement("canvas");
-			finalTileCanvas.width = sWidth;
-			finalTileCanvas.height = sHeight;
-			const tileCtx = finalTileCanvas.getContext("2d");
-
-			transitionOnlyCanvas = document.createElement("canvas");
-			transitionOnlyCanvas.width = sWidth;
-			transitionOnlyCanvas.height = sHeight;
-			const transCtx = transitionOnlyCanvas.getContext("2d");
-
-			// Base crop
-			tileCtx.drawImage(sourceImage, sx, sy, sWidth, sHeight, 0, 0, sWidth, sHeight);
-
-			const blendRatio = blendSlider.value / 100;
-			if (blendRatio === 0) {
-				drawPreview();
-				return;
-			}
-
-			// Calculate available "excess" pixels on all sides
-			const leftExcess = sx;
-			const rightExcess = sourceImage.naturalWidth - (sx + sWidth);
-			const topExcess = sy;
-			const bottomExcess = sourceImage.naturalHeight - (sy + sHeight);
-
-			const horizSide = rightExcess >= leftExcess ? "right" : "left";   // which side we borrow from
-			const vertSide = bottomExcess >= topExcess ? "bottom" : "top";
-
-			let blendW = 0, blendH = 0, didHoriz = false, didVert = false;
-
-			// helper: edge patch
-			const createAndBlendPatch = (sx_, sy_, w_, h_, dx_, dy_, edge) => {
-				if (w_ <= 0 || h_ <= 0) return;
-				const patch = document.createElement("canvas");
-				patch.width = w_;
-				patch.height = h_;
-				const pctx = patch.getContext("2d");
-				pctx.drawImage(sourceImage, sx_, sy_, w_, h_, 0, 0, w_, h_);
-				pctx.globalCompositeOperation = "destination-in";
-
-				const mode = blendModeSelect.value;
-				if (mode === "wavy") {
-					pctx.drawImage(buildWavyMaskCanvas(w_, h_, edge), 0, 0);
-				} else if (mode === "perlin") {
-					pctx.drawImage(buildPerlinMaskCanvas(w_, h_, edge), 0, 0);
+		function findBestShift(gray, w, h, dir, target, minS, maxS = null) {
+			const limit = maxS || Math.floor((dir === "h" ? w : h) * 0.95);
+			const scores = [];
+			for (let s = minS; s < limit; s++) {
+				let diff = 0;
+				if (dir === "h") {
+					for (let y = 0; y < h; y += 4)
+						for (let x = 0; x < w - s; x += 8) diff += Math.abs(gray[y * w + x] - gray[y * w + x + s]);
 				} else {
-					drawLinearMask(pctx, w_, h_, edge);
+					for (let x = 0; x < w; x += 4)
+						for (let y = 0; y < h - s; y += 8) diff += Math.abs(gray[y * w + x] - gray[(y + s) * w + x]);
 				}
-				pctx.globalCompositeOperation = "source-over";
-				tileCtx.drawImage(patch, dx_, dy_);
-				transCtx.drawImage(patch, dx_, dy_);
-			};
-
-			// horizontal seam
-			if (horizSide === "right" && rightExcess > 0) {
-				blendW = Math.floor(Math.min(rightExcess, sWidth / 2) * blendRatio);
-				if (blendW > 0) {
-					createAndBlendPatch(sx + sWidth, sy, blendW, sHeight, 0, 0, "left");
-					didHoriz = true;
-				}
-			} else if (horizSide === "left" && leftExcess > 0) {
-				blendW = Math.floor(Math.min(leftExcess, sWidth / 2) * blendRatio);
-				if (blendW > 0) {
-					createAndBlendPatch(sx - blendW, sy, blendW, sHeight, sWidth - blendW, 0, "right");
-					didHoriz = true;
-				}
+				scores.push({ s, v: diff });
 			}
+			if (!scores.length) return 0;
+			if (maxS !== null) return scores.reduce((m, p) => p.v < m.v ? p : m).s;
 
-			// vertical seam
-			if (vertSide === "bottom" && bottomExcess > 0) {
-				blendH = Math.floor(Math.min(bottomExcess, sHeight / 2) * blendRatio);
-				if (blendH > 0) {
-					createAndBlendPatch(sx, sy + sHeight, sWidth, blendH, 0, 0, "top");
-					didVert = true;
-				}
-			} else if (vertSide === "top" && topExcess > 0) {
-				blendH = Math.floor(Math.min(topExcess, sHeight / 2) * blendRatio);
-				if (blendH > 0) {
-					createAndBlendPatch(sx, sy - blendH, sWidth, blendH, 0, sHeight - blendH, "bottom");
-					didVert = true;
-				}
+			const mins = [];
+			for (let i = 1; i < scores.length - 1; i++) {
+				if (scores[i].v < scores[i - 1].v && scores[i].v < scores[i + 1].v) mins.push(scores[i].s);
 			}
-
-			if (didHoriz && didVert && blendW > 0 && blendH > 0) {
-				const corner = document.createElement("canvas");
-				corner.width = blendW;
-				corner.height = blendH;
-				const cctx = corner.getContext("2d");
-
-				// choose diagonal source + destination + which corner
-				let srcX, srcY, dstX, dstY, which;
-				if (horizSide === "right" && vertSide === "bottom") { // top-left corner uses BR source
-					srcX = sx + sWidth;
-					srcY = sy + sHeight;
-					dstX = 0;
-					dstY = 0;
-					which = "tl";
-				} else if (horizSide === "right" && vertSide === "top") { // bottom-left corner uses TR source
-					srcX = sx + sWidth;
-					srcY = sy - blendH;
-					dstX = 0;
-					dstY = sHeight - blendH;
-					which = "bl";
-				} else if (horizSide === "left" && vertSide === "bottom") { // top-right corner uses BL source
-					srcX = sx - blendW;
-					srcY = sy + sHeight;
-					dstX = sWidth - blendW;
-					dstY = 0;
-					which = "tr";
-				} else { // left & top -> bottom-right corner uses TL source
-					srcX = sx - blendW;
-					srcY = sy - blendH;
-					dstX = sWidth - blendW;
-					dstY = sHeight - blendH;
-					which = "br";
-				}
-
-				cctx.drawImage(sourceImage, srcX, srcY, blendW, blendH, 0, 0, blendW, blendH);
-				cctx.globalCompositeOperation = "destination-in";
-				const mode = blendModeSelect.value;
-				if (mode === "wavy") {
-					cctx.drawImage(buildWavyCornerMaskCanvas(blendW, blendH, which, sWidth, sHeight, dstX, dstY), 0, 0);
-				} else if (mode === "perlin") {
-					cctx.drawImage(buildPerlinCornerMaskCanvas(blendW, blendH, which, sWidth, sHeight, dstX, dstY), 0, 0);
-				} else {
-					drawCornerLinearMask(cctx, blendW, blendH, which);
-				}
-				cctx.globalCompositeOperation = "source-over";
-				tileCtx.drawImage(corner, dstX, dstY);
-				transCtx.drawImage(corner, dstX, dstY);
-			}
-
-			drawPreview();
+			const c = mins.filter(v => v >= target);
+			return c.length ? c[0] : (mins.length ? mins[mins.length - 1] : scores[0].s);
 		}
 
-		// ---- Mask helpers
-		function drawLinearMask(ctx, w, h, edge) {
-			const g = (edge === "left" || edge === "right")
-				? ctx.createLinearGradient(0, 0, w, 0)
-				: ctx.createLinearGradient(0, 0, 0, h);
-
-			if (edge === "left" || edge === "top") {
-				g.addColorStop(0, "rgba(0,0,0,1)");
-				g.addColorStop(1, "rgba(0,0,0,0)");
-			} else { // right or bottom
-				g.addColorStop(0, "rgba(0,0,0,0)");
-				g.addColorStop(1, "rgba(0,0,0,1)");
-			}
-			ctx.fillStyle = g;
-			ctx.fillRect(0, 0, w, h);
-		}
-
-		function drawCornerLinearMask(ctx, w, h, which) {
-			// Create a 2-D alpha mask using black–transparent gradients
-			const gX = ctx.createLinearGradient(0, 0, w, 0);
-			const gY = ctx.createLinearGradient(0, 0, 0, h);
-
-			// Horizontal ramp
-			if (which === "tl" || which === "bl") {
-				gX.addColorStop(0, "rgba(0,0,0,1)");
-				gX.addColorStop(1, "rgba(0,0,0,0)");
-			} else { // right side
-				gX.addColorStop(0, "rgba(0,0,0,0)");
-				gX.addColorStop(1, "rgba(0,0,0,1)");
-			}
-
-			// Vertical ramp
-			if (which === "tl" || which === "tr") {
-				gY.addColorStop(0, "rgba(0,0,0,1)");
-				gY.addColorStop(1, "rgba(0,0,0,0)");
-			} else { // bottom side
-				gY.addColorStop(0, "rgba(0,0,0,0)");
-				gY.addColorStop(1, "rgba(0,0,0,1)");
-			}
-
-			// Multiply the two ramps together using destination-in
-			const temp = document.createElement("canvas");
-			temp.width = w;
-			temp.height = h;
-			const tctx = temp.getContext("2d");
-
-			// First ramp
-			tctx.fillStyle = gX;
-			tctx.fillRect(0, 0, w, h);
-
-			// Multiply with second ramp
-			tctx.globalCompositeOperation = "destination-in";
-			tctx.fillStyle = gY;
-			tctx.fillRect(0, 0, w, h);
-
-			// Draw onto the real mask context
-			ctx.drawImage(temp, 0, 0);
-		}
-
-
-		// Wavy edge mask (periodic & orientation-correct)
-		function buildWavyMaskCanvas(w, h, edge) {
-			const mask = document.createElement("canvas");
-			mask.width = w;
-			mask.height = h;
-			const mctx = mask.getContext("2d");
-			const img = mctx.createImageData(w, h);
-			const data = img.data;
-
-			const isLR = (edge === "left" || edge === "right");
-			const thickness = isLR ? w : h;
-			const orthoLen = isLR ? h : w;
-
-			const wav = parseInt(wavinessSlider.value, 10) || 0;
-			const amp = Math.min(0.45, (wav / 100) * 0.5) * thickness;
-			const wavesBase = Math.max(1, Math.round((wav / 100) * 8)); // integer -> periodic
-			const waves2 = wavesBase * 2;
-			const TWO_PI = Math.PI * 2;
-			let i = 0;
-
-			for (let y = 0; y < h; y++) {
-				for (let x = 0; x < w; x++) {
-					const t = (isLR ? y : x) / Math.max(1, orthoLen - 1);
-					const offs = amp * (0.7 * Math.sin(TWO_PI * wavesBase * t) + 0.3 * Math.sin(TWO_PI * waves2 * t));
-					let pos;
-					if (edge === "left") pos = x - offs;
-					else if (edge === "right") pos = (w - 1 - x) - offs;
-					else if (edge === "top") pos = y - offs;
-					else pos = (h - 1 - y) - offs;
-
-					let a = 1 - (pos / Math.max(1, thickness));
-					a = clamp01(a);
-					a = a * a * (3 - 2 * a);
-					data[i++] = 255;
-					data[i++] = 255;
-					data[i++] = 255;
-					data[i++] = Math.round(a * 255);
+		function findBestOrigin(feat, w, h, pX, pY) {
+			const stride = Math.max(1, Math.floor(pX / 4));
+			let best = Infinity, bx = 0, by = 0;
+			for (let y = 0; y < h - pY; y += stride) {
+				for (let x = 0; x < w - pX; x += stride) {
+					let score = 0;
+					const i1 = y * w + (x + pX - 1);
+					const i2 = y * w + (x + pX);
+					score += Math.abs(feat[i1] - feat[i2]);
+					const i3 = (y + pY - 1) * w + x;
+					const i4 = (y + pY) * w + x;
+					score += Math.abs(feat[i3] - feat[i4]);
+					if (score < best) { best = score; bx = x; by = y; }
 				}
 			}
-			mctx.putImageData(img, 0, 0);
-			return mask;
-		}
-
-		// 2-D wavy corner mask using global coordinates for continuous waves
-		function buildWavyCornerMaskCanvas(w, h, which, tileW, tileH, offsetX, offsetY) {
-			const mask = document.createElement("canvas");
-			mask.width = w;
-			mask.height = h;
-			const ctx = mask.getContext("2d");
-			const img = ctx.createImageData(w, h);
-			const d = img.data;
-
-			const wav = parseInt(wavinessSlider.value, 10) || 0;
-			const ampX = Math.min(0.45, (wav / 100) * 0.5) * w;
-			const ampY = Math.min(0.45, (wav / 100) * 0.5) * h;
-			const waves = Math.max(1, Math.round((wav / 100) * 8));
-			const TWO_PI = Math.PI * 2;
-			let i = 0;
-
-			for (let y = 0; y < h; y++) {
-				const globalY = y + offsetY;
-				const tY = globalY / Math.max(1, tileH - 1);
-				const offX = ampX * (0.7 * Math.sin(TWO_PI * waves * tY) + 0.3 * Math.sin(TWO_PI * waves * 2 * tY));
-
-				for (let x = 0; x < w; x++) {
-					const globalX = x + offsetX;
-					const tX = globalX / Math.max(1, tileW - 1);
-					const offY = ampY * (0.7 * Math.sin(TWO_PI * waves * tX) + 0.3 * Math.sin(TWO_PI * waves * 2 * tX));
-
-					// x-ramp orientation
-					let posX;
-					if (which === "tl" || which === "bl") posX = x - offX; // left seam
-					else posX = (w - 1 - x) - offX; // right seam
-
-					// y-ramp orientation
-					let posY;
-					if (which === "tl" || which === "tr") posY = y - offY; // top seam
-					else posY = (h - 1 - y) - offY; // bottom seam
-
-					let ax = 1 - (posX / Math.max(1, w));
-					let ay = 1 - (posY / Math.max(1, h));
-					ax = clamp01(ax);
-					ay = clamp01(ay);
-					// smooth and multiply
-					ax = ax * ax * (3 - 2 * ax);
-					ay = ay * ay * (3 - 2 * ay);
-					const a = clamp01(ax * ay);
-
-					d[i++] = 255;
-					d[i++] = 255;
-					d[i++] = 255;
-					d[i++] = Math.round(a * 255);
-				}
-			}
-			ctx.putImageData(img, 0, 0);
-			return mask;
-		}
-
-		// ---- Perlin Noise Mask Functions ----
-		function buildPerlinMaskCanvas(w, h, edge) {
-			const mask = document.createElement("canvas");
-			mask.width = w;
-			mask.height = h;
-			const mctx = mask.getContext("2d");
-			const img = mctx.createImageData(w, h);
-			const data = img.data;
-
-			const isLR = (edge === "left" || edge === "right");
-			const thickness = isLR ? w : h;
-			const scale = (parseInt(perlinScaleSlider.value, 10) || 50) / 1000;
-			const octaves = parseInt(perlinOctavesSlider.value, 10) || 3;
-			const amp = 0.45 * thickness; // Amplitude of the noise effect
-			let i = 0;
-
-			for (let y = 0; y < h; y++) {
-				for (let x = 0; x < w; x++) {
-					let noiseVal = 0;
-					let frequency = scale;
-					let amplitude = 1;
-					let maxAmplitude = 0;
-					for (let o = 0; o < octaves; o++) {
-						noiseVal += perlin.noise(x * frequency, y * frequency) * amplitude;
-						maxAmplitude += amplitude;
-						amplitude *= 0.5; // persistence
-						frequency *= 2; // lacunarity
-					}
-					noiseVal /= maxAmplitude; // normalize
-
-					const offs = amp * noiseVal;
-					let pos;
-					if (edge === "left") pos = x - offs;
-					else if (edge === "right") pos = (w - 1 - x) - offs;
-					else if (edge === "top") pos = y - offs;
-					else pos = (h - 1 - y) - offs;
-
-					let a = 1 - (pos / Math.max(1, thickness));
-					a = clamp01(a);
-					a = a * a * (3 - 2 * a); // smoothstep
-					data[i++] = 255;
-					data[i++] = 255;
-					data[i++] = 255;
-					data[i++] = Math.round(a * 255);
-				}
-			}
-			mctx.putImageData(img, 0, 0);
-			return mask;
-		}
-
-		function buildPerlinCornerMaskCanvas(w, h, which, tileW, tileH, offsetX, offsetY) {
-			const mask = document.createElement("canvas");
-			mask.width = w;
-			mask.height = h;
-			const ctx = mask.getContext("2d");
-			const img = ctx.createImageData(w, h);
-			const d = img.data;
-
-			const scale = (parseInt(perlinScaleSlider.value, 10) || 50) / 1000;
-			const octaves = parseInt(perlinOctavesSlider.value, 10) || 3;
-			const ampX = 0.45 * w;
-			const ampY = 0.45 * h;
-			let i = 0;
-
-			const getNoise = (x, y) => {
-				let noiseVal = 0, freq = scale, ampl = 1, maxAmpl = 0;
-				for (let o = 0; o < octaves; o++) {
-					noiseVal += perlin.noise(x * freq, y * freq, o * 10.3) * ampl;
-					maxAmpl += ampl;
-					ampl *= 0.5;
-					freq *= 2;
-				}
-				return noiseVal / maxAmpl;
-			};
-
-			for (let y = 0; y < h; y++) {
-				for (let x = 0; x < w; x++) {
-					const globalX = x + offsetX;
-					const globalY = y + offsetY;
-
-					const noiseVal = getNoise(globalX, globalY);
-					const offX = ampX * noiseVal;
-					const offY = ampY * noiseVal;
-
-					let posX; // x-ramp orientation
-					if (which === "tl" || which === "bl") posX = x - offX;
-					else posX = (w - 1 - x) - offX;
-
-					let posY; // y-ramp orientation
-					if (which === "tl" || which === "tr") posY = y - offY;
-					else posY = (h - 1 - y) - offY;
-
-					let ax = 1 - (posX / Math.max(1, w));
-					let ay = 1 - (posY / Math.max(1, h));
-					ax = clamp01(ax);
-					ay = clamp01(ay);
-					ax = ax * ax * (3 - 2 * ax); // smoothstep
-					ay = ay * ay * (3 - 2 * ay);
-					const a = clamp01(ax * ay);
-
-					d[i++] = 255;
-					d[i++] = 255;
-					d[i++] = 255;
-					d[i++] = Math.round(a * 255);
-				}
-			}
-			ctx.putImageData(img, 0, 0);
-			return mask;
-		}
-
-
-		function clamp01(v) {
-			return v < 0 ? 0 : (v > 1 ? 1 : v);
-		}
-
-		// ---- Preview
-		function drawPreview() {
-			const rect = previewCanvas.getBoundingClientRect();
-			if (rect.width === 0 || rect.height === 0) return;
-			previewCanvas.width = rect.width;
-			previewCanvas.height = rect.height;
-
-			previewCtx.clearRect(0, 0, previewCanvas.width, previewCanvas.height);
-
-			const sourceCanvas = showTransitionsCheckbox.checked ? transitionOnlyCanvas : finalTileCanvas;
-			if (!sourceCanvas) return;
-
-			const pattern = previewCtx.createPattern(sourceCanvas, "repeat");
-			previewCtx.save();
-			previewCtx.translate(transform.x, transform.y);
-			previewCtx.scale(transform.zoom, transform.zoom);
-			previewCtx.fillStyle = pattern;
-
-			const fillX = -transform.x / transform.zoom;
-			const fillY = -transform.y / transform.zoom;
-			const fillW = previewCanvas.width / transform.zoom;
-			const fillH = previewCanvas.height / transform.zoom;
-			previewCtx.fillRect(fillX, fillY, fillW, fillH);
-			previewCtx.restore();
+			return { bestX: bx, bestY: by };
 		}
 	</script>
 </body>
