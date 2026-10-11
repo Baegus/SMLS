@@ -1,5 +1,7 @@
-export function createPreview(previewCanvas, webglCanvas) {
+// renderView(view) renders the visible area and returns the source canvas, or null if nothing to show
+export function createPreview(previewCanvas, renderView) {
 	const previewCtx = previewCanvas.getContext("2d");
+	let drawPending = false;
 	let transform = { x: 0, y: 0, zoom: 1 };
 	let loopX = true;
 	let loopY = true;
@@ -105,36 +107,34 @@ export function createPreview(previewCanvas, webglCanvas) {
 	}
 
 	function drawPreview() {
+		if (drawPending) return;
+		drawPending = true;
+		requestAnimationFrame(drawNow);
+	}
+
+	function drawNow() {
+		drawPending = false;
 		const rect = previewCanvas.getBoundingClientRect();
-		if (
-			rect.width !== previewCanvas.width ||
-			rect.height !== previewCanvas.height
-		) {
-			previewCanvas.width = rect.width;
-			previewCanvas.height = rect.height;
+		const width = Math.round(rect.width);
+		const height = Math.round(rect.height);
+		if (width !== previewCanvas.width || height !== previewCanvas.height) {
+			previewCanvas.width = width;
+			previewCanvas.height = height;
 		}
 
-		previewCtx.clearRect(0, 0, previewCanvas.width, previewCanvas.height);
-		if (webglCanvas.width === 0) return;
+		previewCtx.clearRect(0, 0, width, height);
+		if (width === 0 || height === 0) return;
 
-		const repetition = loopX
-			? (loopY ? "repeat" : "repeat-x")
-			: (loopY ? "repeat-y" : "no-repeat");
-		const pattern = previewCtx.createPattern(webglCanvas, repetition);
-		previewCtx.save();
-		previewCtx.translate(transform.x, transform.y);
-		previewCtx.scale(transform.zoom, transform.zoom);
-		previewCtx.fillStyle = pattern;
-
-		const pW = previewCanvas.width;
-		const pH = previewCanvas.height;
-		const startX = -transform.x / transform.zoom;
-		const startY = -transform.y / transform.zoom;
-		const w = pW / transform.zoom;
-		const h = pH / transform.zoom;
-
-		previewCtx.fillRect(startX, startY, w, h);
-		previewCtx.restore();
+		const source = renderView({
+			width,
+			height,
+			x: transform.x,
+			y: transform.y,
+			zoom: transform.zoom,
+			loopX,
+			loopY
+		});
+		if (source) previewCtx.drawImage(source, 0, 0);
 	}
 
 	return {

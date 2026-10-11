@@ -9,6 +9,13 @@ uniform int u_mode;        // 0=linear, 1=wavy, 2=perlin
 uniform vec3 u_params;     // x=waviness/amp, y=scale, z=octaves
 uniform vec2 u_offsets;    // x=horizontal offset, y=vertical offset
 uniform bool u_showTrans;
+uniform bool u_preview;
+uniform vec3 u_view;       // x, y = pan offset (px), z = zoom
+uniform vec2 u_viewSize;
+uniform vec2 u_loop;       // 1.0 = repeat along axis
+uniform int u_samples;     // supersamples per axis in preview mode
+
+#define MAX_SAMPLES 4
 
 #pragma glslify: linearMask = require('./blend-modes/linear.glsl')
 #pragma glslify: wavyMask = require('./blend-modes/wavy.glsl')
@@ -92,5 +99,30 @@ vec4 getSingleSeamlessTile(vec2 uv) {
 }
 
 void main() {
-	gl_FragColor = getSingleSeamlessTile(v_texCoord);
+	if (!u_preview) {
+		gl_FragColor = getSingleSeamlessTile(v_texCoord);
+		return;
+	}
+
+	vec2 tilePos = (v_texCoord * u_viewSize - u_view.xy) / (u_view.z * u_crop.zw);
+	if ((u_loop.x < 0.5 && (tilePos.x < 0.0 || tilePos.x >= 1.0)) ||
+		(u_loop.y < 0.5 && (tilePos.y < 0.0 || tilePos.y >= 1.0))) {
+		gl_FragColor = vec4(0.0);
+		return;
+	}
+
+	// Supersample when zoomed out so tiles downscale without aliasing
+	vec2 pixelStep = 1.0 / (u_view.z * u_crop.zw);
+	vec4 sum = vec4(0.0);
+	for (int i = 0; i < MAX_SAMPLES; i++) {
+		if (i >= u_samples) break;
+		for (int j = 0; j < MAX_SAMPLES; j++) {
+			if (j >= u_samples) break;
+			vec2 offset = (vec2(float(i), float(j)) + 0.5) / float(u_samples) - 0.5;
+			vec4 c = getSingleSeamlessTile(fract(tilePos + offset * pixelStep));
+			sum += vec4(c.rgb * c.a, c.a);
+		}
+	}
+	sum /= float(u_samples * u_samples);
+	gl_FragColor = sum.a > 0.0 ? vec4(sum.rgb / sum.a, sum.a) : vec4(0.0);
 }

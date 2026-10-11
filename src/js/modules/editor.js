@@ -50,13 +50,14 @@ export function initEditor() {
 	const cropHeightInput = document.getElementById("crop-height-input");
 
 	// ---- State
-	let cropper, sourceImage;
+	let cropper, sourceImage, cropData;
+	let textureImage = null;
 	let uploadedFileName = "image";
 	let currentObjectUrl = null;
 	let blendLinked = true;
 
 	const renderer = createRenderer(webglCanvas);
-	const preview = createPreview(previewCanvas, webglCanvas);
+	const preview = createPreview(previewCanvas, renderView);
 
 	// --- Event Listeners ---
 	dropZone.addEventListener("click", () => imageInput.click());
@@ -99,7 +100,7 @@ export function initEditor() {
 	cropWidthInput.addEventListener("input", debouncedSizeChange);
 	cropHeightInput.addEventListener("input", debouncedSizeChange);
 
-	const updateTexture = () => requestAnimationFrame(generateSeamlessTexture);
+	const updateTexture = () => preview.draw();
 
 	function updateBlendValues() {
 		blendValueSpanX.textContent = blendSliderX.value;
@@ -156,9 +157,13 @@ export function initEditor() {
 	});
 
 	downloadBtn.addEventListener("click", () => {
+		if (!textureImage || !cropData) return;
+		renderer.render(textureImage, cropData, getSettings());
 		webglCanvas.toBlob(function (blob) {
-			const fileName = `SMLS_${webglCanvas.width}x${webglCanvas.height}_${uploadedFileName}.png`;
+			const fileName = `SMLS_${cropData.width}x${cropData.height}_${uploadedFileName}.png`;
 			saveAs(blob, fileName);
+			// Shrinks the WebGL canvas back to preview size
+			preview.draw();
 		}, "image/png");
 	});
 
@@ -167,7 +172,7 @@ export function initEditor() {
 			resetTool();
 	});
 
-	showTransitionsCheckbox.addEventListener("change", generateSeamlessTexture);
+	showTransitionsCheckbox.addEventListener("change", updateTexture);
 	const updateLooping = () => {
 		preview.setLooping(loopXCheckbox.checked, loopYCheckbox.checked);
 	};
@@ -180,7 +185,10 @@ export function initEditor() {
 		uploadedFileName = file.name.replace(/\.[^/.]+$/, "");
 		currentObjectUrl = URL.createObjectURL(file);
 		imageToCrop.classList.remove("loaded");
-		sourceImage = new Image();
+		textureImage = null;
+		cropData = null;
+		const image = new Image();
+		sourceImage = image;
 		sourceImage.onload = () => {
 			imageToCrop.src = currentObjectUrl;
 			dropZone.style.display = "none";
@@ -195,7 +203,7 @@ export function initEditor() {
 			downloadBtn.disabled = false;
 			resetBtn.style.display = "block";
 
-			renderer.uploadTexture(sourceImage);
+			loadTexture(file, image);
 
 			if (cropper) cropper.destroy();
 			cropper = new Cropper(imageToCrop, {
@@ -204,6 +212,7 @@ export function initEditor() {
 				zoomable: false,
 				crop: () => {
 					const data = cropper.getData({ rounded: true });
+					cropData = data;
 					if (
 						document.activeElement !== cropWidthInput &&
 						document.activeElement !== cropHeightInput
@@ -211,7 +220,7 @@ export function initEditor() {
 						cropWidthInput.value = data.width;
 						cropHeightInput.value = data.height;
 					}
-					requestAnimationFrame(generateSeamlessTexture);
+					preview.draw();
 				},
 				ready: function () {
 					this.cropper.setData({
@@ -246,6 +255,8 @@ export function initEditor() {
 		preview.reset();
 		if (currentObjectUrl) URL.revokeObjectURL(currentObjectUrl);
 		sourceImage = null;
+		textureImage = null;
+		cropData = null;
 		currentObjectUrl = null;
 		uploadedFileName = "image";
 
@@ -284,9 +295,36 @@ export function initEditor() {
 		}
 	}
 
-	function generateSeamlessTexture() {
-		if (!cropper || !sourceImage) return;
-		renderer.render(sourceImage, cropper.getData({ rounded: true }), {
+	// Decodes off the main thread when possible, so large images don't block the UI on upload
+	async function loadTexture(file, image) {
+		let bitmap = null;
+		try {
+			bitmap = await createImageBitmap(file, {
+				imageOrientation: "from-image",
+				premultiplyAlpha: "none"
+			});
+		} catch {
+			// Fall back to uploading the <img> directly
+		}
+		if (sourceImage !== image) {
+			bitmap?.close();
+			return;
+		}
+		if (
+			bitmap &&
+			(bitmap.width !== image.naturalWidth || bitmap.height !== image.naturalHeight)
+		) {
+			bitmap.close();
+			bitmap = null;
+		}
+		renderer.uploadTexture(bitmap ?? image);
+		bitmap?.close();
+		textureImage = image;
+		preview.draw();
+	}
+
+	function getSettings() {
+		return {
 			blendAmountX: blendSliderX.value,
 			blendAmountY: blendSliderY.value,
 			blendMode: blendModeSelect.value,
@@ -294,7 +332,12 @@ export function initEditor() {
 			perlinScale: perlinScaleSlider.value,
 			perlinOctaves: perlinOctavesSlider.value,
 			showTransitions: showTransitionsCheckbox.checked
-		});
-		preview.draw();
+		};
+	}
+
+	function renderView(view) {
+		if (!textureImage || !cropData) return null;
+		renderer.render(textureImage, cropData, getSettings(), view);
+		return webglCanvas;
 	}
 }
