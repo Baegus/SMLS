@@ -1,6 +1,8 @@
 export function createPreview(previewCanvas, webglCanvas) {
 	const previewCtx = previewCanvas.getContext("2d");
 	let transform = { x: 0, y: 0, zoom: 1 };
+	let loopX = true;
+	let loopY = true;
 	let isPanning = false;
 	let lastMousePos = { x: 0, y: 0 };
 	let initialPinchDistance = null;
@@ -115,7 +117,10 @@ export function createPreview(previewCanvas, webglCanvas) {
 		previewCtx.clearRect(0, 0, previewCanvas.width, previewCanvas.height);
 		if (webglCanvas.width === 0) return;
 
-		const pattern = previewCtx.createPattern(webglCanvas, "repeat");
+		const repetition = loopX
+			? (loopY ? "repeat" : "repeat-x")
+			: (loopY ? "repeat-y" : "no-repeat");
+		const pattern = previewCtx.createPattern(webglCanvas, repetition);
 		previewCtx.save();
 		previewCtx.translate(transform.x, transform.y);
 		previewCtx.scale(transform.zoom, transform.zoom);
@@ -134,6 +139,11 @@ export function createPreview(previewCanvas, webglCanvas) {
 
 	return {
 		draw: drawPreview,
+		setLooping(x, y) {
+			loopX = x;
+			loopY = y;
+			drawPreview();
+		},
 		reset() {
 			transform = { x: 0, y: 0, zoom: 1 };
 			isPanning = false;

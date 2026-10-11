@@ -140,7 +140,11 @@ export function createRenderer(webglCanvas) {
 
 		gl.uniform2f(uImgRes, imgW, imgH);
 		gl.uniform4f(uCrop, sx, sy, sw, sh);
-		gl.uniform1f(uBlendAmt, settings.blendAmount / 100);
+		gl.uniform2f(
+			uBlendAmt,
+			settings.blendAmountX / 100,
+			settings.blendAmountY / 100
+		);
 
 		let modeIdx = 0;
 		if (settings.blendMode === "wavy") modeIdx = 1;

@@ -19,7 +19,8 @@
 	},
 	"dependencies": {
 		"cropperjs": "^1.6.2",
-		"file-saver": "^2.0.5"
+		"file-saver": "^2.0.5",
+		"lucide": "^1.55.0"
 	},
 	"devDependencies": {
 		"@parcel/transformer-glsl": "^2.16.4",

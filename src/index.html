@@ -52,8 +52,21 @@
 		</div>
 
 		<div id="blend-slider-container" class="slider-control">
-			<label for="blend-amount">Blend Amount: <span id="blend-value">16</span>%</label>
-			<input type="range" id="blend-amount" min="0" max="100" value="16">
+			<div class="blend-heading">
+				<span>Blend Amount</span>
+			</div>
+			<div class="blend-sliders">
+			<div class="blend-axis">
+				<label for="blend-amount-x">X: <span id="blend-value-x">16</span>%</label>
+				<input type="range" id="blend-amount-x" min="0" max="100" value="16">
+			</div>
+			<button id="blend-link" type="button" aria-label="Link X and Y blend amounts" aria-pressed="true"
+				title="Unlink X and Y blend amounts"></button>
+			<div class="blend-axis">
+				<label for="blend-amount-y">Y: <span id="blend-value-y">16</span>%</label>
+				<input type="range" id="blend-amount-y" min="0" max="100" value="16">
+			</div>
+			</div>
 		</div>
 
 		<div id="waviness-container" class="slider-control">
@@ -84,6 +97,9 @@
 			<canvas id="preview-canvas"></canvas>
 		</div>
 		<div class="controls">
+			<span>Loop</span>
+			<label><input type="checkbox" id="loop-x" checked> X</label>
+			<label><input type="checkbox" id="loop-y" checked> Y</label>
 			<label>
 				<input type="checkbox" id="show-transitions">
 				Show transitions only

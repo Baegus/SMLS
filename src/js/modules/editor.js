@@ -1,5 +1,6 @@
 import Cropper from "cropperjs";
 import { saveAs } from "file-saver";
+import { createElement, Link, Unlink } from "lucide";
 import { debounce } from "./utils.js";
 import { findPattern } from "./algorithms.js";
 import { createRenderer } from "./renderer.js";
@@ -17,13 +18,18 @@ export function initEditor() {
 	const previewCanvas = document.getElementById("preview-canvas");
 	const webglCanvas = document.getElementById("webgl-canvas");
 	const showTransitionsCheckbox = document.getElementById("show-transitions");
+	const loopXCheckbox = document.getElementById("loop-x");
+	const loopYCheckbox = document.getElementById("loop-y");
 	const algoContainer = document.getElementById("algo-container");
 	const blendModeSelect = document.getElementById("blend-mode");
 	const blendSliderContainer = document.getElementById(
 		"blend-slider-container"
 	);
-	const blendSlider = document.getElementById("blend-amount");
-	const blendValueSpan = document.getElementById("blend-value");
+	const blendSliderX = document.getElementById("blend-amount-x");
+	const blendSliderY = document.getElementById("blend-amount-y");
+	const blendValueSpanX = document.getElementById("blend-value-x");
+	const blendValueSpanY = document.getElementById("blend-value-y");
+	const blendLinkButton = document.getElementById("blend-link");
 	const wavinessContainer = document.getElementById("waviness-container");
 	const wavinessSlider = document.getElementById("waviness");
 	const wavinessValueSpan = document.getElementById("waviness-value");
@@ -47,6 +53,7 @@ export function initEditor() {
 	let cropper, sourceImage;
 	let uploadedFileName = "image";
 	let currentObjectUrl = null;
+	let blendLinked = true;
 
 	const renderer = createRenderer(webglCanvas);
 	const preview = createPreview(previewCanvas, webglCanvas);
@@ -94,10 +101,39 @@ export function initEditor() {
 
 	const updateTexture = () => requestAnimationFrame(generateSeamlessTexture);
 
-	blendSlider.addEventListener("input", () => {
-		blendValueSpan.textContent = blendSlider.value;
+	function updateBlendValues() {
+		blendValueSpanX.textContent = blendSliderX.value;
+		blendValueSpanY.textContent = blendSliderY.value;
 		updateTexture();
+	}
+
+	function updateBlendLink() {
+		blendLinkButton.setAttribute("aria-pressed", String(blendLinked));
+		blendLinkButton.title = blendLinked
+			? "Unlink X and Y blend amounts"
+			: "Link X and Y blend amounts (use X value)";
+		blendLinkButton.replaceChildren(createElement(blendLinked ? Link : Unlink, {
+			width: 20,
+			height: 20,
+			"aria-hidden": "true"
+		}));
+	}
+
+	blendSliderX.addEventListener("input", () => {
+		if (blendLinked) blendSliderY.value = blendSliderX.value;
+		updateBlendValues();
 	});
+	blendSliderY.addEventListener("input", () => {
+		if (blendLinked) blendSliderX.value = blendSliderY.value;
+		updateBlendValues();
+	});
+	blendLinkButton.addEventListener("click", () => {
+		blendLinked = !blendLinked;
+		if (blendLinked) blendSliderY.value = blendSliderX.value;
+		updateBlendLink();
+		updateBlendValues();
+	});
+	updateBlendLink();
 	wavinessSlider.addEventListener("input", () => {
 		wavinessValueSpan.textContent = wavinessSlider.value;
 		updateTexture();
@@ -132,6 +168,11 @@ export function initEditor() {
 	});
 
 	showTransitionsCheckbox.addEventListener("change", generateSeamlessTexture);
+	const updateLooping = () => {
+		preview.setLooping(loopXCheckbox.checked, loopYCheckbox.checked);
+	};
+	loopXCheckbox.addEventListener("change", updateLooping);
+	loopYCheckbox.addEventListener("change", updateLooping);
 
 	function handleFile(file) {
 		if (!file.type.startsWith("image/")) return;
@@ -246,7 +287,8 @@ export function initEditor() {
 	function generateSeamlessTexture() {
 		if (!cropper || !sourceImage) return;
 		renderer.render(sourceImage, cropper.getData({ rounded: true }), {
-			blendAmount: blendSlider.value,
+			blendAmountX: blendSliderX.value,
+			blendAmountY: blendSliderY.value,
 			blendMode: blendModeSelect.value,
 			waviness: wavinessSlider.value,
 			perlinScale: perlinScaleSlider.value,

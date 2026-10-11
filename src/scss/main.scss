@@ -191,6 +191,46 @@ label {
 	border: none;
 }
 
+.blend-heading {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 10px;
+	font-weight: 600;
+}
+
+.blend-sliders {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) 36px minmax(0, 1fr);
+	align-items: end;
+	gap: 12px;
+	margin-top: 12px;
+}
+
+#blend-link {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 36px;
+	height: 36px;
+	padding: 0;
+	flex-shrink: 0;
+}
+
+#blend-link[aria-pressed="false"] {
+	background-color: var(--reset-btn-bg);
+	color: var(--text-light);
+}
+
+#blend-link[aria-pressed="false"]:hover {
+	background-color: var(--reset-btn-hover-bg);
+}
+
+#blend-link:focus-visible {
+	outline: 2px solid var(--text-light);
+	outline-offset: 3px;
+}
+
 select {
 	width: 100%;
 	padding: 8px 10px;
