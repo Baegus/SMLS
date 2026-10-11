@@ -14,3 +14,22 @@ If you already have an ideal loop point in your image, you may disable the blend
 
 ## Donate
 If you like this tool, you can [give me a tip using PayPal](https://paypal.me/Baegus). Thank you so much for your support!
+
+## Development
+
+Install Node.js 22 LTS or newer, then run:
+
+```sh
+npm ci
+npm run dev
+```
+
+Parcel serves the app at `http://localhost:1234` (or the next available port).
+Use `npm run debug` to enable development diagnostics. Extra Parcel options can
+be passed through, for example `npm run dev -- --port 1235`.
+
+```sh
+npm run build
+```
+
+The production build is written to `dist/`.

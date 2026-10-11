@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>SMLS: Make any image a seamless tile</title>
+	<meta name="description"
+		content="A simple web tool to create a seamless tiling texture from (almost) any image in seconds, with live preview and easy controls!">
+	<meta name="keywords"
+		content="texture, seamless, tile, texture generator, tileable, photo, picture, image editor, online">
+	<link rel="stylesheet" href="./scss/main.scss">
+	<link rel="icon" href="./img/favicon/favicon.ico">
+</head>
+
+<body>
+	<header>
+		<div class="header-left">
+			<div class="logo"></div>
+			<h1 class="app-title">SMLS: <span class="subtitle">Make any image a&nbsp;seamless&nbsp;tile</span></h1>
+		</div>
+		<div class="header-right">
+			<span>Made by <a href="https://baegus.cz" target="_blank">Baegus</a></span>
+			<span>Star on <a href="https://github.com/Baegus/SMLS" target="_blank">GitHub</a></span>
+		</div>
+	</header>
+
+	<div id="editor-container" class="container">
+		<h2>Upload & Crop Image</h2>
+		<div id="drop-zone">
+			<p>Drag & Drop your image anywhere or click&nbsp;here</p>
+			<input type="file" id="image-input" accept="image/*" style="display: none;">
+		</div>
+
+		<div><img id="image-to-crop" alt="Source image for cropping"></div>
+
+		<div id="crop-size-container" class="controls" style="display: none;">
+			<input type="number" id="crop-width-input" min="1">
+			<span>×</span>
+			<input type="number" id="crop-height-input" min="1">
+			<span> px</span>
+			<button id="find-pattern-btn" title="Automatically find repeating pattern size">Auto-Find Pattern</button>
+		</div>
+
+		<div id="algo-container" class="controls">
+			<label for="blend-mode">Blend Algorithm</label>
+			<select id="blend-mode">
+				<option value="perlin" selected>Perlin Noise</option>
+				<option value="wavy">Wavy gradient</option>
+				<option value="linear">Linear gradient</option>
+			</select>
+		</div>
+
+		<div id="blend-slider-container" class="slider-control">
+			<label for="blend-amount">Blend Amount: <span id="blend-value">16</span>%</label>
+			<input type="range" id="blend-amount" min="0" max="100" value="16">
+		</div>
+
+		<div id="waviness-container" class="slider-control">
+			<label for="waviness">Waviness: <span id="waviness-value">35</span>%</label>
+			<input type="range" id="waviness" min="0" max="100" value="35">
+		</div>
+
+		<div id="perlin-scale-container" class="slider-control">
+			<label for="perlin-scale">Noise Scale: <span id="perlin-scale-value">20</span>%</label>
+			<input type="range" id="perlin-scale" min="1" max="100" value="20">
+		</div>
+
+		<div id="perlin-octaves-container" class="slider-control">
+			<label for="perlin-octaves">Noise Detail (Octaves): <span id="perlin-octaves-value">3</span></label>
+			<input type="range" id="perlin-octaves" min="1" max="8" value="3">
+		</div>
+
+
+		<div class="controls">
+			<button id="download-btn" disabled>Download Tile (PNG)</button>
+			<button id="reset-btn" style="display: none;">Try another image</button>
+		</div>
+	</div>
+
+	<div class="container">
+		<h2>Preview (Pan & Zoom)</h2>
+		<div id="preview-container">
+			<canvas id="preview-canvas"></canvas>
+		</div>
+		<div class="controls">
+			<label>
+				<input type="checkbox" id="show-transitions">
+				Show transitions only
+			</label>
+		</div>
+	</div>
+
+	<!-- Hidden WebGL Canvas for generation -->
+	<canvas id="webgl-canvas" style="display: none;"></canvas>
+	<script type="module" src="./js/index.js"></script>
+</body>
+
+</html>

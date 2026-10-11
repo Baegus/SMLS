@@ -1,0 +1,6 @@
+.DS_Store
+*.map
+node_modules/
+dist/
+.parcel-cache/
+_TEST_IMAGES/

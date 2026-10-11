@@ -1,0 +1,34 @@
+{
+	"name": "smls",
+	"version": "1.0.0",
+	"private": true,
+	"description": "Create seamless tiling textures locally in your browser",
+	"browserslist": "> 0.25%, last 2 versions, not dead",
+	"targets": {
+		"public": {
+			"distDir": "dist",
+			"publicUrl": "./",
+			"source": "src/index.html"
+		}
+	},
+	"scripts": {
+		"dev": "node ./parcel/runDev.mjs",
+		"debug": "node ./parcel/runDev.mjs --debug",
+		"prebuild": "node ./parcel/runPrebuild.mjs",
+		"build": "parcel build --no-source-maps --config ./parcel/.parcel.prod"
+	},
+	"dependencies": {
+		"cropperjs": "^1.6.2",
+		"file-saver": "^2.0.5"
+	},
+	"devDependencies": {
+		"@parcel/transformer-glsl": "^2.16.4",
+		"@parcel/transformer-sass": "^2.15.2",
+		"express": "^4.19.2",
+		"parcel": "^2.15.2",
+		"parcel-reporter-static-files-copy": "^1.5.3"
+	},
+	"staticFiles": {
+		"staticPath": "static"
+	}
+}
