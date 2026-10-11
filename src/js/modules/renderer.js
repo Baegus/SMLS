@@ -132,7 +132,7 @@ export function createRenderer(webglCanvas) {
 
 		const uImgRes = gl.getUniformLocation(glProgram, "u_imgRes");
 		const uCrop = gl.getUniformLocation(glProgram, "u_crop");
-		const uBlendAmt = gl.getUniformLocation(glProgram, "u_blendAmt");
+		const uBlendSize = gl.getUniformLocation(glProgram, "u_blendSize");
 		const uMode = gl.getUniformLocation(glProgram, "u_mode");
 		const uParams = gl.getUniformLocation(glProgram, "u_params");
 		const uOffsets = gl.getUniformLocation(glProgram, "u_offsets");
@@ -141,9 +141,9 @@ export function createRenderer(webglCanvas) {
 		gl.uniform2f(uImgRes, imgW, imgH);
 		gl.uniform4f(uCrop, sx, sy, sw, sh);
 		gl.uniform2f(
-			uBlendAmt,
-			settings.blendAmountX / 100,
-			settings.blendAmountY / 100
+			uBlendSize,
+			Math.floor(Math.min(Math.max(leftExcess, rightExcess), sw / 2) * settings.blendAmountX / 100),
+			Math.floor(Math.min(Math.max(topExcess, bottomExcess), sh / 2) * settings.blendAmountY / 100)
 		);
 
 		let modeIdx = 0;

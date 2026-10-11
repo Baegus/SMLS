@@ -4,7 +4,7 @@ varying vec2 v_texCoord;
 uniform sampler2D u_image;
 uniform vec2 u_imgRes;
 uniform vec4 u_crop;       // x, y, width, height
-uniform vec2 u_blendAmt;
+uniform vec2 u_blendSize;
 uniform int u_mode;        // 0=linear, 1=wavy, 2=perlin
 uniform vec3 u_params;     // x=waviness/amp, y=scale, z=octaves
 uniform vec2 u_offsets;    // x=horizontal offset, y=vertical offset
@@ -32,8 +32,8 @@ vec4 getSingleSeamlessTile(vec2 uv) {
 	
 	vec4 finalColor = texture2D(u_image, (srcOrigin + pixelPos) / u_imgRes);
 	
-	float blendX = floor(u_blendAmt.x * u_crop.z);
-	float blendY = floor(u_blendAmt.y * u_crop.w);
+	float blendX = u_blendSize.x;
+	float blendY = u_blendSize.y;
 	
 	float alphaH = 0.0;
 	float alphaV = 0.0;
